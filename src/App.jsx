@@ -1,87 +1,214 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Canvas } from '@react-three/fiber';
+import { Canvas, useThree } from '@react-three/fiber';
 import { OrbitControls, ContactShadows, PerspectiveCamera } from '@react-three/drei';
-import { Physics } from '@react-three/cannon';
-import { Book, Info, Monitor, Layers } from 'lucide-react';
+import * as THREE from 'three';
+import { Book, Monitor, Layers } from 'lucide-react';
 
-import Breadboard from './components/Breadboard';
+import Breadboard, { BOARD_TYPES, BOARD_TOP_Y, snapToGrid } from './components/Breadboard';
 import ComponentPalette from './components/ComponentPalette';
 import InstrumentPanel from './components/InstrumentPanel';
 import Textbook from './components/Textbook';
-import { 
-  Resistor, LED, Capacitor, Diode, Transistor, 
-  IntegratedCircuit, Switch, PowerSupply, Antenna, Magnet, Wire 
+import {
+  Resistor, LED, Capacitor, Diode, Transistor,
+  IntegratedCircuit, Switch, PowerSupply, Antenna, Magnet, Wire,
 } from './components/InteractiveComponents';
+
+// Height of each component's origin above the board so it sits on the surface
+// with its legs in the holes.
+const Y_OFFSET = {
+  Resistor: 0.02, LED: 0.025, Capacitor: 0.04, Diode: 0.02, Transistor: 0.05,
+  IC: 0.025, Switch: 0.02, PowerSupply: 0.1, Antenna: 0.2, Magnet: 0.025, Wire: 0.005,
+};
+
+const restY = (type) => BOARD_TOP_Y + (Y_OFFSET[type] ?? 0.03);
+
+const COMPONENT_VISUALS = {
+  Resistor, LED, Capacitor, Diode, Transistor,
+  IC: IntegratedCircuit, Switch, PowerSupply, Antenna, Magnet, Wire,
+};
+
+// While a drag is active, project pointer moves onto a horizontal plane at the
+// dragged component's height. Window-level listeners keep the drag alive even
+// when the pointer leaves the component or the canvas.
+function DragController({ active, planeY, onDrag, onEnd }) {
+  const { camera, gl } = useThree();
+
+  useEffect(() => {
+    if (!active) return;
+    const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -planeY);
+    const raycaster = new THREE.Raycaster();
+    const ndc = new THREE.Vector2();
+    const hit = new THREE.Vector3();
+
+    const onMove = (ev) => {
+      const rect = gl.domElement.getBoundingClientRect();
+      ndc.set(
+        ((ev.clientX - rect.left) / rect.width) * 2 - 1,
+        -((ev.clientY - rect.top) / rect.height) * 2 + 1,
+      );
+      raycaster.setFromCamera(ndc, camera);
+      if (raycaster.ray.intersectPlane(plane, hit)) onDrag(hit);
+    };
+
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onEnd);
+    return () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onEnd);
+    };
+  }, [active, planeY, camera, gl, onDrag, onEnd]);
+
+  return null;
+}
 
 export default function App() {
   const [showTextbook, setShowTextbook] = useState(false);
   const [placedComponents, setPlacedComponents] = useState([]);
   const [selectedType, setSelectedType] = useState(null);
-  const [selectedIndex, setSelectedIndex] = useState(null);
+  const [selectedId, setSelectedId] = useState(null);
+  const [dragId, setDragId] = useState(null);
+  const [hoverCell, setHoverCell] = useState(null);
   const [boardType, setBoardType] = useState('HALF');
 
+  const board = BOARD_TYPES[boardType] || BOARD_TYPES.HALF;
+  const selectedComponent = placedComponents.find((c) => c.id === selectedId) || null;
+  const dragComponent = placedComponents.find((c) => c.id === dragId) || null;
+
   const handleBoardClick = useCallback((point) => {
-    if (!selectedType) return;
-    
-    const newComponent = {
-      type: selectedType,
-      position: [point.x, point.y + 0.1, point.z],
-      id: Date.now(),
-    };
-    
-    setPlacedComponents((prev) => [...prev, newComponent]);
-    setSelectedType(null);
-  }, [selectedType]);
-
-  const removeSelected = () => {
-    if (selectedIndex === null) return;
-    setPlacedComponents(prev => prev.filter((_, i) => i !== selectedIndex));
-    setSelectedIndex(null);
-  };
-
-  const renderComponent = (comp, index) => {
-    const props = {
-      key: comp.id,
-      position: comp.position,
-      selected: selectedIndex === index,
-      onSelect: () => setSelectedIndex(index)
-    };
-
-    switch (comp.type) {
-      case 'Resistor': return <Resistor {...props} />;
-      case 'LED': return <LED {...props} color="red" />;
-      case 'Capacitor': return <Capacitor {...props} />;
-      case 'Diode': return <Diode {...props} />;
-      case 'Transistor': return <Transistor {...props} />;
-      case 'IC': return <IntegratedCircuit {...props} />;
-      case 'Switch': return <Switch {...props} />;
-      case 'PowerSupply': return <PowerSupply {...props} />;
-      case 'Antenna': return <Antenna {...props} />;
-      case 'Magnet': return <Magnet {...props} />;
-      case 'Wire': return <Wire {...props} />;
-      default: return null;
+    if (selectedType) {
+      const [x, z] = snapToGrid(point, board);
+      setPlacedComponents((prev) => [...prev, {
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        type: selectedType,
+        position: [x, restY(selectedType), z],
+        rotation: 0,
+      }]);
+      // selectedType stays active so several parts can be placed in a row
+    } else {
+      setSelectedId(null);
     }
+  }, [selectedType, board]);
+
+  const handleBoardHover = useCallback((point) => {
+    if (!selectedType) return;
+    const [x, z] = snapToGrid(point, board);
+    setHoverCell((prev) =>
+      prev && prev[0] === x && prev[2] === z ? prev : [x, BOARD_TOP_Y + 0.015, z]);
+  }, [selectedType, board]);
+
+  const handleDrag = useCallback((point) => {
+    if (dragId === null) return;
+    const [x, z] = snapToGrid(point, board);
+    setPlacedComponents((prev) => prev.map((c) =>
+      c.id === dragId && (c.position[0] !== x || c.position[2] !== z)
+        ? { ...c, position: [x, c.position[1], z] }
+        : c));
+  }, [dragId, board]);
+
+  const endDrag = useCallback(() => setDragId(null), []);
+
+  const removeSelected = useCallback(() => {
+    if (selectedId === null) return;
+    setPlacedComponents((prev) => prev.filter((c) => c.id !== selectedId));
+    setSelectedId(null);
+  }, [selectedId]);
+
+  const handlePaletteSelect = useCallback((type) => {
+    setSelectedType((prev) => (prev === type ? null : type));
+    setSelectedId(null);
+    setHoverCell(null);
+  }, []);
+
+  useEffect(() => {
+    const onKey = (e) => {
+      if (['INPUT', 'SELECT', 'TEXTAREA'].includes(e.target.tagName)) return;
+      if (e.key === 'Escape') {
+        setSelectedType(null);
+        setSelectedId(null);
+        setHoverCell(null);
+      } else if ((e.key === 'Delete' || e.key === 'Backspace') && selectedId !== null) {
+        e.preventDefault();
+        removeSelected();
+      } else if ((e.key === 'r' || e.key === 'R') && selectedId !== null) {
+        setPlacedComponents((prev) => prev.map((c) =>
+          c.id === selectedId ? { ...c, rotation: c.rotation + Math.PI / 2 } : c));
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [selectedId, removeSelected]);
+
+  const renderComponent = (comp) => {
+    const Visual = COMPONENT_VISUALS[comp.type];
+    if (!Visual) return null;
+    return (
+      <group
+        key={comp.id}
+        position={comp.position}
+        rotation={[0, comp.rotation || 0, 0]}
+        onPointerDown={(e) => {
+          e.stopPropagation();
+          setSelectedId(comp.id);
+          setDragId(comp.id);
+          document.body.style.cursor = 'grabbing';
+        }}
+        onClick={(e) => e.stopPropagation()}
+        onPointerOver={(e) => {
+          e.stopPropagation();
+          if (dragId === null) document.body.style.cursor = 'grab';
+        }}
+        onPointerOut={() => {
+          if (dragId === null) document.body.style.cursor = 'auto';
+        }}
+      >
+        <Visual selected={selectedId === comp.id} {...(comp.type === 'LED' ? { color: 'red' } : {})} />
+      </group>
+    );
   };
+
+  const hint = selectedType
+    ? `Placing ${selectedType} — click the board (Esc or re-click the palette to stop)`
+    : selectedId !== null
+      ? 'Drag to move · R = rotate · Delete = remove · click empty board to deselect'
+      : 'Pick a component, then click the board · drag placed parts to move them';
 
   return (
     <div style={{ width: '100%', height: '100%', position: 'relative', background: '#0a0a0a' }}>
-      <Canvas shadows>
+      <Canvas shadows onPointerUp={() => { document.body.style.cursor = 'auto'; }}>
         <PerspectiveCamera makeDefault position={[0.6, 0.6, 0.6]} fov={40} />
         <color attach="background" args={['#0a0a0a']} />
-        
+
         <ambientLight intensity={0.5} />
         <spotLight position={[5, 5, 5]} angle={0.2} penumbra={1} intensity={1.5} castShadow />
         <pointLight position={[-5, 5, -5]} intensity={0.5} color="#4488ff" />
-        
-        <Physics gravity={[0, -9.8, 0]}>
-          <Breadboard type={boardType} onClick={handleBoardClick} />
-          {placedComponents.map((comp, index) => renderComponent(comp, index))}
-        </Physics>
+
+        <Breadboard
+          type={boardType}
+          onClick={handleBoardClick}
+          onHover={handleBoardHover}
+          onHoverEnd={() => setHoverCell(null)}
+        />
+        {placedComponents.map(renderComponent)}
+
+        {selectedType && hoverCell && (
+          <mesh position={hoverCell}>
+            <boxGeometry args={[0.045, 0.02, 0.045]} />
+            <meshBasicMaterial color="#3b82f6" transparent opacity={0.6} depthWrite={false} />
+          </mesh>
+        )}
+
+        <DragController
+          active={dragId !== null}
+          planeY={dragComponent ? dragComponent.position[1] : 0}
+          onDrag={handleDrag}
+          onEnd={endDrag}
+        />
 
         <ContactShadows position={[0, -0.1, 0]} opacity={0.5} scale={10} blur={2.5} far={4} />
-        <OrbitControls 
-          makeDefault 
-          enableDamping 
+        <OrbitControls
+          makeDefault
+          enabled={dragId === null}
+          enableDamping
           dampingFactor={0.05}
           minDistance={0.2}
           maxDistance={5}
@@ -90,17 +217,19 @@ export default function App() {
         <gridHelper args={[10, 40, 0x151515, 0x111111]} position={[0, -0.11, 0]} />
       </Canvas>
 
-      {/* UI overlays */}
+      {/* UI overlays — the layer itself and layout rows let pointer events pass
+          through to the canvas; only the actual panels re-enable them. */}
       <div className="ui-layer" style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
         {/* Top Header */}
-        <div style={{ 
-          background: 'rgba(15, 15, 15, 0.98)', 
-          color: 'white', 
-          padding: '10px 20px', 
-          display: 'flex', 
-          justifyContent: 'space-between', 
+        <div style={{
+          background: 'rgba(15, 15, 15, 0.98)',
+          color: 'white',
+          padding: '10px 20px',
+          display: 'flex',
+          justifyContent: 'space-between',
           alignItems: 'center',
-          borderBottom: '1px solid #222'
+          borderBottom: '1px solid #222',
+          pointerEvents: 'auto',
         }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
             <div style={{ background: '#3b82f6', padding: '6px', borderRadius: '6px' }}>
@@ -114,8 +243,8 @@ export default function App() {
           <div style={{ display: 'flex', gap: '10px' }}>
             <div style={{ display: 'flex', alignItems: 'center', background: '#1a1a1a', borderRadius: '6px', padding: '2px 8px', border: '1px solid #333' }}>
               <Layers size={14} color="#666" style={{ marginRight: '8px' }} />
-              <select 
-                value={boardType} 
+              <select
+                value={boardType}
                 onChange={(e) => setBoardType(e.target.value)}
                 style={{
                   background: 'transparent',
@@ -124,7 +253,7 @@ export default function App() {
                   padding: '4px 0',
                   fontSize: '0.85rem',
                   cursor: 'pointer',
-                  outline: 'none'
+                  outline: 'none',
                 }}
               >
                 <option value="MINI">Mini (170)</option>
@@ -133,21 +262,21 @@ export default function App() {
               </select>
             </div>
 
-            <button 
+            <button
               onClick={() => setShowTextbook(!showTextbook)}
-              style={{ 
+              style={{
                 display: 'flex',
                 alignItems: 'center',
                 gap: '8px',
-                padding: '6px 14px', 
-                cursor: 'pointer', 
+                padding: '6px 14px',
+                cursor: 'pointer',
                 backgroundColor: showTextbook ? '#3b82f6' : '#1a1a1a',
                 border: '1px solid #333',
                 borderRadius: '6px',
                 color: 'white',
                 fontSize: '0.85rem',
                 fontWeight: 500,
-                transition: 'all 0.2s'
+                transition: 'all 0.2s',
               }}
             >
               <Book size={16} />
@@ -156,43 +285,45 @@ export default function App() {
           </div>
         </div>
 
-        {/* Main Content Area */}
+        {/* Main Content Area — pointer events stay off so the canvas underneath
+            receives clicks; each side panel re-enables them for itself. */}
         <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
-          <ComponentPalette 
-            onSelect={setSelectedType} 
+          <ComponentPalette
+            onSelect={handlePaletteSelect}
             selectedType={selectedType}
             onRemove={removeSelected}
-            hasSelection={selectedIndex !== null}
+            hasSelection={selectedId !== null}
           />
-          
-          <div style={{ flex: 1, pointerEvents: 'none' }} /> 
-          
+
+          <div style={{ flex: 1 }} />
+
           {showTextbook ? (
             <div style={{ width: '480px', height: '100%', pointerEvents: 'auto', borderLeft: '1px solid #222' }}>
               <Textbook />
             </div>
           ) : (
-            <InstrumentPanel />
+            <InstrumentPanel selected={selectedComponent} />
           )}
         </div>
 
         {/* Bottom Status Bar */}
-        <div style={{ 
-          background: 'rgba(10, 10, 10, 0.95)', 
-          color: '#555', 
-          padding: '6px 20px', 
+        <div style={{
+          background: 'rgba(10, 10, 10, 0.95)',
+          color: '#555',
+          padding: '6px 20px',
           fontSize: '0.75rem',
           display: 'flex',
           justifyContent: 'space-between',
-          borderTop: '1px solid #222'
+          borderTop: '1px solid #222',
         }}>
           <div style={{ display: 'flex', gap: '20px' }}>
             <span>Objects: {placedComponents.length}</span>
-            <span>Controls: Rotate (Left), Pan (Right), Zoom (Scroll)</span>
+            <span style={{ color: '#888' }}>{hint}</span>
           </div>
           <div style={{ display: 'flex', gap: '15px' }}>
-            <span style={{ display: 'flex', alignItems: 'center', gap: '4px', color: '#00ff00' }}>
-              <div style={{ width: 6, height: 6, borderRadius: '50%', background: '#00ff00' }} /> SIMULATOR ACTIVE
+            <span>Rotate (Left) · Pan (Right) · Zoom (Scroll)</span>
+            <span style={{ display: 'flex', alignItems: 'center', gap: '4px', color: '#3b82f6' }}>
+              <div style={{ width: 6, height: 6, borderRadius: '50%', background: '#3b82f6' }} /> {board.name}
             </span>
           </div>
         </div>

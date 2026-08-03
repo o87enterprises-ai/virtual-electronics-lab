@@ -1,5 +1,4 @@
-import React from 'react';
-import { 
+import {
   Zap, Radio, Circle, Layout, Trash2, Cpu, Power, 
   Wifi, Magnet as MagnetIcon, MousePointer2, ToggleLeft
 } from 'lucide-react';
@@ -47,9 +46,14 @@ export default function ComponentPalette({ onSelect, selectedType, onRemove, has
       pointerEvents: 'auto',
       overflowY: 'auto'
     }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-        <Layout size={20} className="text-blue-500" />
-        <h3 style={{ margin: 0, fontSize: '1rem', fontWeight: 600 }}>Components</h3>
+      <div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <Layout size={20} className="text-blue-500" />
+          <h3 style={{ margin: 0, fontSize: '1rem', fontWeight: 600 }}>Components</h3>
+        </div>
+        <p style={{ fontSize: '0.72rem', color: '#666', marginTop: '8px', lineHeight: 1.5 }}>
+          Pick a part, then click the board to place it. Click again for more, Esc to stop.
+        </p>
       </div>
 
       {categories.map((cat) => (

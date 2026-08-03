@@ -5,6 +5,6 @@ html, body, #root { width: 100%; height: 100%; overflow: hidden; }
   top: 0; left: 0; width: 100%; height: 100%;
   pointer-events: none;   /* allow clicks to pass through to canvas */
 }
-.ui-layer > * {
-  pointer-events: auto;    /* re‑enable interactions on UI elements */
-}
+/* Interactive panels opt back in individually via inline pointerEvents:'auto'.
+   A blanket `.ui-layer > *` rule would turn the full-width layout rows into
+   invisible click shields over the canvas. */
