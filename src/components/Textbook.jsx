@@ -1,5 +1,3 @@
-import React from 'react';
-
 const Textbook = () => {
   return (
     <div style={{
@@ -133,9 +131,9 @@ const Textbook = () => {
         If you know any two, you can calculate the third.
       </p>
       <p>
-        Example: A 5 V battery connected to a 1 kΩ resistor:
+        Example: A 5 V battery connected to a 1 kΩ resistor:
       </p>
-      <pre style={{ backgroundColor: '#eee', padding: '10px' }}>I = V / R = 5 V / 1000 Ω = 0.005 A = 5 mA</pre>
+      <pre style={{ backgroundColor: '#eee', padding: '10px' }}>I = V / R = 5 V / 1000 Ω = 0.005 A = 5 mA</pre>
 
       <h3>1.3 Power and Energy</h3>
       <p>
@@ -147,7 +145,7 @@ const Textbook = () => {
       </p>
       <pre style={{ backgroundColor: '#eee', padding: '10px' }}>P = I² × R = V² / R</pre>
       <p>
-        Resistors dissipate power as heat. Always choose a resistor with a power rating higher than the calculated value (typical: 1/4 W).
+        Resistors dissipate power as heat. Always choose a resistor with a power rating higher than the calculated value (typical: 1/4 W).
       </p>
 
       <hr />
@@ -159,7 +157,7 @@ const Textbook = () => {
         <li><strong>Digital Multimeter (DMM):</strong> Measures DC/AC voltage, current, resistance, continuity. Probes must touch the nodes you wish to measure.</li>
         <li><strong>Oscilloscope:</strong> Visualises voltage over time. Connect the probe tip to a circuit node and the ground clip to the circuit’s ground.</li>
         <li><strong>Function Generator:</strong> Produces sine, square, triangle waves. Adjust frequency, amplitude, offset.</li>
-        <li><strong>DC Power Supply:</strong> Provides adjustable voltage (0‑30 V) with current limiting.</li>
+        <li><strong>DC Power Supply:</strong> Provides adjustable voltage (0‑30 V) with current limiting.</li>
       </ul>
 
       <h3>2.2 Reading Schematics and Breadboard Layouts</h3>
@@ -190,7 +188,7 @@ const Textbook = () => {
         <li>3rd band = multiplier (×10ⁿ)</li>
         <li>4th band = tolerance (gold ±5%, silver ±10%)</li>
       </ul>
-      <p>Example: Yellow‑Violet‑Red‑Gold → 4‑7‑×100 ±5% = 4700 Ω (4.7 kΩ).</p>
+      <p>Example: Yellow‑Violet‑Red‑Gold → 4‑7‑×100 ±5% = 4700 Ω (4.7 kΩ).</p>
 
       <h3>3.2 Capacitors – Storing Charge</h3>
       <p>A capacitor stores energy in an electric field. Capacitance is measured in farads (F), usually µF, nF, pF.</p>
@@ -218,12 +216,12 @@ const Textbook = () => {
     |
    GND`}</pre>
       <p>
-        Choose R to set current. For a red LED (forward voltage ~2 V) and desired 10 mA:<br />
-        R = (5 V – 2 V) / 0.01 A = 300 Ω → use 330 Ω (standard value).
+        Choose R to set current. For a red LED (forward voltage ~2 V) and desired 10 mA:<br />
+        R = (5 V – 2 V) / 0.01 A = 300 Ω → use 330 Ω (standard value).
       </p>
       <p><strong>Breadboard layout:</strong></p>
       <ol>
-        <li>Connect +5 V to power rail (red).</li>
+        <li>Connect +5 V to power rail (red).</li>
         <li>Connect GND to blue rail.</li>
         <li>Insert resistor between a free row and the LED’s anode (long leg).</li>
         <li>Insert LED cathode (short leg) into a row connected to GND via jumper.</li>
@@ -248,7 +246,7 @@ const Textbook = () => {
          |
         GND`}</pre>
       <p>V_out = V_in * (R2 / (R1 + R2))</p>
-      <p>Use two 10 kΩ resistors and 5 V input; V_out = 2.5 V.</p>
+      <p>Use two 10 kΩ resistors and 5 V input; V_out = 2.5 V.</p>
 
       <hr />
 
@@ -257,11 +255,11 @@ const Textbook = () => {
       <p>A small base current controls a larger collector current.</p>
       <p><strong>Circuit:</strong></p>
       <ul>
-        <li>Base resistor (1 kΩ) to a push‑button to 5 V</li>
-        <li>Collector to LED (with resistor) to 5 V</li>
+        <li>Base resistor (1 kΩ) to a push‑button to 5 V</li>
+        <li>Collector to LED (with resistor) to 5 V</li>
         <li>Emitter to GND</li>
       </ul>
-      <p>Pressing the button lights the LED. The transistor saturates (V_CE ≈ 0.2 V).</p>
+      <p>Pressing the button lights the LED. The transistor saturates (V_CE ≈ 0.2 V).</p>
 
       <h3>5.2 Common‑Emitter Amplifier</h3>
       <p>Biased with a voltage divider, it amplifies small AC signals (e.g., from a microphone). Use a coupling capacitor on input/output.</p>
@@ -289,7 +287,7 @@ const Textbook = () => {
 
       <h3>6.3 Non‑Inverting Amplifier</h3>
       <p>Gain = 1 + R2 / R1</p>
-      <p>Build a non‑inverting amplifier with gain 2, supply ±12 V, and verify with oscilloscope.</p>
+      <p>Build a non‑inverting amplifier with gain 2, supply ±12 V, and verify with oscilloscope.</p>
 
       <h3>6.4 Comparator & Schmitt Trigger</h3>
       <p>Without feedback, the op‑amp saturates high or low depending on which input is higher. Add positive feedback for hysteresis (Schmitt trigger).</p>
@@ -309,7 +307,7 @@ const Textbook = () => {
       <h3>7.2 555 Timer – Astable (Oscillator)</h3>
       <p>Produces a square wave. Frequency set by two resistors and a capacitor.</p>
       <pre style={{ backgroundColor: '#eee', padding: '10px' }}>f = 1.44 / ((R1 + 2R2) × C)</pre>
-      <p>Build a 1 Hz LED flasher with R1=1 kΩ, R2=10 kΩ, C=100 µF.</p>
+      <p>Build a 1 Hz LED flasher with R1=1 kΩ, R2=10 kΩ, C=100 µF.</p>
       <p><strong>Monostable (one-shot):</strong> Output pulse length t = 1.1 × R × C. Use as a touch timer.</p>
 
       <hr />
@@ -328,11 +326,11 @@ const Textbook = () => {
       <p>In the virtual lab, an Arduino Uno is modelled. You can write code in a built‑in editor (C/C++). Start with <strong>Blink</strong>: digital pin 13 toggles an LED.</p>
       <p>
         <strong>Digital I/O:</strong> <code>pinMode(pin, OUTPUT)</code>, <code>digitalWrite(pin, HIGH)</code>.<br />
-        <strong>Analog Input:</strong> <code>analogRead(A0)</code> returns 0‑1023 (0‑5 V).
+        <strong>Analog Input:</strong> <code>analogRead(A0)</code> returns 0‑1023 (0‑5 V).
       </p>
 
       <h3>9.2 PWM and Servo Control</h3>
-      <p>PWM (Pulse Width Modulation) dims LEDs or controls motor speed. A servo motor is positioned by sending a 50 Hz signal with pulse width between 1 ms and 2 ms.</p>
+      <p>PWM (Pulse Width Modulation) dims LEDs or controls motor speed. A servo motor is positioned by sending a 50 Hz signal with pulse width between 1 ms and 2 ms.</p>
 
       <hr />
 

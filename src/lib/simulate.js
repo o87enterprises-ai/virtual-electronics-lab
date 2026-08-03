@@ -45,8 +45,14 @@ const DIODE_PARAMS = {
   LED: { vf: 1.9, ron: 10 },
 };
 
+const cellOf = (x, z) => [Math.round(x / PITCH), Math.round(z / PITCH)];
+
 // World-space grid cells occupied by a component's terminals.
 export function terminalCells(comp) {
+  // Variable-length jumpers store their far end explicitly.
+  if (comp.type === 'Wire' && comp.end) {
+    return [cellOf(comp.position[0], comp.position[2]), cellOf(comp.end[0], comp.end[1])];
+  }
   const t = TERMINALS[comp.type];
   if (!t) return [];
   const k = ((Math.round((comp.rotation || 0) / (Math.PI / 2)) % 4) + 4) % 4;

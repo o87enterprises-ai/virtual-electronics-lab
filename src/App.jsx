@@ -4,6 +4,7 @@ import { OrbitControls, ContactShadows, PerspectiveCamera } from '@react-three/d
 import * as THREE from 'three';
 import {
   Book, Monitor, Layers, PanelLeftOpen, Wrench, RotateCw, X, Trash2, CircleDot,
+  Lightbulb, CircleHelp,
 } from 'lucide-react';
 
 import Breadboard from './components/Breadboard';
@@ -13,6 +14,9 @@ import ComponentPalette from './components/ComponentPalette';
 import InstrumentPanel from './components/InstrumentPanel';
 import Textbook from './components/Textbook';
 import FaultEffects from './components/FaultEffects';
+import HelpModal from './components/HelpModal';
+import ProjectsModal from './components/ProjectsModal';
+import { PITCH } from './lib/constants';
 import {
   Resistor, LED, Capacitor, Diode, Transistor,
   IntegratedCircuit, Switch, PowerSupply, Antenna, Magnet, Wire,
@@ -22,7 +26,7 @@ import {
 // with its legs in the holes.
 const Y_OFFSET = {
   Resistor: 0.02, LED: 0.025, Capacitor: 0.04, Diode: 0.02, Transistor: 0.05,
-  IC: 0.025, Switch: 0.02, PowerSupply: 0.1, Antenna: 0.2, Magnet: 0.025, Wire: 0.005,
+  IC: 0.025, Switch: 0.02, PowerSupply: 0.055, Antenna: 0.2, Magnet: 0.025, Wire: 0.005,
 };
 
 const restY = (type) => BOARD_TOP_Y + (Y_OFFSET[type] ?? 0.03);
@@ -43,37 +47,12 @@ function useIsMobile() {
   return mobile;
 }
 
-// While a drag is active, project pointer moves onto a horizontal plane at the
-// dragged component's height. Window-level listeners keep the drag alive even
-// when the pointer leaves the component or the canvas.
-function DragController({ active, planeY, onDrag, onEnd }) {
-  const { camera, gl } = useThree();
-
-  useEffect(() => {
-    if (!active) return;
-    const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -planeY);
-    const raycaster = new THREE.Raycaster();
-    const ndc = new THREE.Vector2();
-    const hit = new THREE.Vector3();
-
-    const onMove = (ev) => {
-      const rect = gl.domElement.getBoundingClientRect();
-      ndc.set(
-        ((ev.clientX - rect.left) / rect.width) * 2 - 1,
-        -((ev.clientY - rect.top) / rect.height) * 2 + 1,
-      );
-      raycaster.setFromCamera(ndc, camera);
-      if (raycaster.ray.intersectPlane(plane, hit)) onDrag(hit);
-    };
-
-    window.addEventListener('pointermove', onMove);
-    window.addEventListener('pointerup', onEnd);
-    return () => {
-      window.removeEventListener('pointermove', onMove);
-      window.removeEventListener('pointerup', onEnd);
-    };
-  }, [active, planeY, camera, gl, onDrag, onEnd]);
-
+// Exposes the live three.js state (camera, renderer, controls) to DOM-side
+// handlers, so drags can attach their listeners imperatively at pointerdown
+// instead of waiting on a canvas-side React effect that can commit late.
+function CanvasBridge({ ctxRef }) {
+  const three = useThree();
+  useEffect(() => { ctxRef.current = three; });
   return null;
 }
 
@@ -121,30 +100,82 @@ export default function App() {
   // x/z offset between the grab point and the component origin, so a part
   // doesn't jump to the cursor when picked up
   const dragOffset = useRef([0, 0]);
+  // Mirror of selectedId for canvas handlers (same staleness reason as above):
+  // a part only drags when it was already selected before the touch.
+  const selectedIdRef = useRef(null);
+  const selectPart = useCallback((id) => {
+    selectedIdRef.current = id;
+    setSelectedId(id);
+  }, []);
+  // Same again for the palette pick and board size, so the board's click
+  // handler never acts on a stale placement mode.
+  const selectedTypeRef = useRef(null);
+  const selectType = useCallback((v) => {
+    const next = typeof v === 'function' ? v(selectedTypeRef.current) : v;
+    selectedTypeRef.current = next;
+    setSelectedType(next);
+  }, []);
+  const boardRef = useRef(null);
+  // First tap of a two-tap wire placement (world [x, z]); ref for canvas handlers.
+  const [wireStart, setWireStart] = useState(null);
+  const wireStartRef = useRef(null);
+  const setWireStartBoth = useCallback((v) => {
+    wireStartRef.current = v;
+    setWireStart(v);
+  }, []);
+  const [showHelp, setShowHelp] = useState(() => !localStorage.getItem('oc-welcome-seen'));
+  const [showProjects, setShowProjects] = useState(false);
+  const closeHelp = useCallback(() => {
+    localStorage.setItem('oc-welcome-seen', '1');
+    setShowHelp(false);
+  }, []);
 
   const board = BOARD_TYPES[boardType] || BOARD_TYPES.HALF;
+  useEffect(() => { boardRef.current = board; }, [board]);
   const selectedComponent = placedComponents.find((c) => c.id === selectedId) || null;
-  const dragComponent = placedComponents.find((c) => c.id === dragId) || null;
+  const canvasCtxRef = useRef(null);
 
   const sim = useMemo(() => runSimulation(placedComponents), [placedComponents]);
   const faultIds = Object.keys(sim.faults || {});
 
+  // Reads every bit of placement context from refs: the three.js scene can
+  // deliver events to a handler from a slightly older commit, so captured
+  // props here would intermittently be one interaction behind.
   const handleBoardClick = useCallback((point) => {
-    if (selectedType) {
-      const [x, z] = snapToGrid(point, board);
+    const type = selectedTypeRef.current;
+    const brd = boardRef.current || BOARD_TYPES.HALF;
+    if (type === 'Wire') {
+      // Two-tap wires: first tap anchors the start, second tap sets the end
+      // and the jumper auto-spans whatever distance lies between.
+      const [x, z] = snapToGrid(point, brd);
+      const start = wireStartRef.current;
+      if (!start) {
+        setWireStartBoth([x, z]);
+      } else if (start[0] !== x || start[1] !== z) {
+        setPlacedComponents((prev) => [...prev, {
+          id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+          type: 'Wire',
+          position: [start[0], restY('Wire'), start[1]],
+          end: [x, z],
+          rotation: 0,
+        }]);
+        setWireStartBoth(null);
+      }
+    } else if (type) {
+      const [x, z] = snapToGrid(point, brd);
       setPlacedComponents((prev) => [...prev, {
         id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-        type: selectedType,
-        position: [x, restY(selectedType), z],
+        type,
+        position: [x, restY(type), z],
         rotation: placementRotationRef.current,
-        ...(DEFAULT_VALUES[selectedType] !== undefined ? { value: DEFAULT_VALUES[selectedType] } : {}),
-        ...(selectedType === 'Switch' ? { pressed: false } : {}),
+        ...(DEFAULT_VALUES[type] !== undefined ? { value: DEFAULT_VALUES[type] } : {}),
+        ...(type === 'Switch' ? { pressed: false } : {}),
       }]);
-      // selectedType stays active so several parts can be placed in a row
+      // the picked type stays active so several parts can be placed in a row
     } else {
-      setSelectedId(null);
+      selectPart(null);
     }
-  }, [selectedType, board]);
+  }, [setWireStartBoth, selectPart]);
 
   const handleBoardHover = useCallback((point) => {
     if (!selectedType) return;
@@ -153,54 +184,118 @@ export default function App() {
       prev && prev[0] === x && prev[2] === z ? prev : [x, BOARD_TOP_Y + 0.015, z]);
   }, [selectedType, board]);
 
-  const handleDrag = useCallback((point) => {
-    if (dragId === null) return;
+  const dragTo = useCallback((id, point) => {
     const [ox, oz] = dragOffset.current;
-    const [x, z] = snapToGrid({ x: point.x + ox, z: point.z + oz }, board);
-    setPlacedComponents((prev) => prev.map((c) =>
-      c.id === dragId && (c.position[0] !== x || c.position[2] !== z)
-        ? { ...c, position: [x, c.position[1], z] }
-        : c));
-  }, [dragId, board]);
+    const [x, z] = snapToGrid({ x: point.x + ox, z: point.z + oz }, boardRef.current || BOARD_TYPES.HALF);
+    setPlacedComponents((prev) => prev.map((c) => {
+      if (c.id !== id || (c.position[0] === x && c.position[2] === z)) return c;
+      const moved = { ...c, position: [x, c.position[1], z] };
+      if (c.end) moved.end = [c.end[0] + (x - c.position[0]), c.end[1] + (z - c.position[2])];
+      return moved;
+    }));
+  }, []);
 
-  const endDrag = useCallback(() => setDragId(null), []);
+  // Starts a drag entirely with DOM listeners: raycast pointer moves onto a
+  // horizontal plane at the part's height and move the part along it.
+  const beginDrag = useCallback((comp, e) => {
+    const ctx = canvasCtxRef.current;
+    if (!ctx) return;
+    dragOffset.current = [comp.position[0] - e.point.x, comp.position[2] - e.point.z];
+    setDragId(comp.id);
+    if (ctx.controls) ctx.controls.enabled = false;
+    document.body.style.cursor = 'grabbing';
+
+    const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -comp.position[1]);
+    const raycaster = new THREE.Raycaster();
+    const ndc = new THREE.Vector2();
+    const hit = new THREE.Vector3();
+    const onMove = (ev) => {
+      const rect = ctx.gl.domElement.getBoundingClientRect();
+      ndc.set(
+        ((ev.clientX - rect.left) / rect.width) * 2 - 1,
+        -((ev.clientY - rect.top) / rect.height) * 2 + 1,
+      );
+      raycaster.setFromCamera(ndc, ctx.camera);
+      if (raycaster.ray.intersectPlane(plane, hit)) dragTo(comp.id, hit);
+    };
+    const end = () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointercancel', end);
+      setDragId(null);
+      if (ctx.controls) ctx.controls.enabled = true;
+      document.body.style.cursor = 'auto';
+    };
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', end, { once: true });
+    window.addEventListener('pointercancel', end);
+  }, [dragTo]);
 
   const removeSelected = useCallback(() => {
     if (selectedId === null) return;
     setPlacedComponents((prev) => prev.filter((c) => c.id !== selectedId));
-    setSelectedId(null);
-  }, [selectedId]);
+    selectPart(null);
+  }, [selectedId, selectPart]);
 
   const rotateSelected = useCallback(() => {
     if (selectedId === null) return;
-    setPlacedComponents((prev) => prev.map((c) =>
-      c.id === selectedId ? { ...c, rotation: c.rotation + Math.PI / 2 } : c));
+    setPlacedComponents((prev) => prev.map((c) => {
+      if (c.id !== selectedId) return c;
+      // Variable wires rotate their end around the start hole.
+      if (c.end) {
+        const dx = c.end[0] - c.position[0];
+        const dz = c.end[1] - c.position[2];
+        return { ...c, end: [c.position[0] + dz, c.position[2] - dx] };
+      }
+      return { ...c, rotation: c.rotation + Math.PI / 2 };
+    }));
   }, [selectedId]);
 
   const handlePaletteSelect = useCallback((type) => {
-    setSelectedType((prev) => (prev === type ? null : type));
-    setSelectedId(null);
+    selectType((prev) => (prev === type ? null : type));
+    selectPart(null);
     setHoverCell(null);
+    setWireStartBoth(null);
     rotatePlacement(0);
     if (isMobile) setPaletteOpen(false); // reveal the board for placement
-  }, [rotatePlacement, isMobile, setPaletteOpen]);
+  }, [rotatePlacement, isMobile, setPaletteOpen, selectPart, selectType, setWireStartBoth]);
 
   const updateComponent = useCallback((id, patch) => {
     setPlacedComponents((prev) => prev.map((c) => (c.id === id ? { ...c, ...patch } : c)));
   }, []);
 
   const stopPlacing = useCallback(() => {
-    setSelectedType(null);
+    selectType(null);
     setHoverCell(null);
-  }, []);
+    setWireStartBoth(null);
+  }, [selectType, setWireStartBoth]);
+
+  // Clear the board and build a guided project in its place.
+  const loadProject = useCallback((project) => {
+    setPlacedComponents(project.parts.map((p, i) => ({
+      id: `proj-${project.id}-${i}-${Date.now()}`,
+      type: p.type,
+      position: [p.at[0] * PITCH, restY(p.type), p.at[1] * PITCH],
+      rotation: p.rotation || 0,
+      ...(p.to ? { end: [p.to[0] * PITCH, p.to[1] * PITCH] } : {}),
+      ...(p.value !== undefined ? { value: p.value } : {}),
+      ...(p.pressed !== undefined ? { pressed: p.pressed } : {}),
+    })));
+    setBoardType('HALF');
+    selectType(null);
+    selectPart(null);
+    setWireStartBoth(null);
+    setShowProjects(false);
+    closeHelp();
+  }, [selectPart, selectType, setWireStartBoth, closeHelp]);
 
   useEffect(() => {
     const onKey = (e) => {
       if (['INPUT', 'SELECT', 'TEXTAREA'].includes(e.target.tagName)) return;
       if (e.key === 'Escape') {
-        setSelectedType(null);
-        setSelectedId(null);
+        selectType(null);
+        selectPart(null);
         setHoverCell(null);
+        setWireStartBoth(null);
       } else if ((e.key === 'Delete' || e.key === 'Backspace') && selectedId !== null) {
         e.preventDefault();
         removeSelected();
@@ -211,7 +306,7 @@ export default function App() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [selectedId, removeSelected, rotateSelected, rotatePlacement]);
+  }, [selectedId, removeSelected, rotateSelected, rotatePlacement, selectPart, selectType, setWireStartBoth]);
 
   const renderComponent = (comp) => {
     const Visual = COMPONENT_VISUALS[comp.type];
@@ -223,19 +318,14 @@ export default function App() {
         rotation={[0, comp.rotation || 0, 0]}
         onPointerDown={(e) => {
           e.stopPropagation();
-          dragOffset.current = [comp.position[0] - e.point.x, comp.position[2] - e.point.z];
-          setSelectedId(comp.id);
-          setDragId(comp.id);
-          document.body.style.cursor = 'grabbing';
-          // End the drag on the raw DOM event: waiting for a React effect to
-          // attach this listener can miss the release of a quick click,
-          // leaving the part glued to the cursor.
-          const end = () => {
-            setDragId(null);
-            document.body.style.cursor = 'auto';
-          };
-          window.addEventListener('pointerup', end, { once: true });
-          window.addEventListener('pointercancel', end, { once: true });
+          // Select-then-move: the first touch only selects. A part drags only
+          // when it was already selected, so browsing a circuit never
+          // accidentally rearranges it.
+          if (selectedIdRef.current !== comp.id) {
+            selectPart(comp.id);
+            return;
+          }
+          beginDrag(comp, e);
         }}
         onClick={(e) => e.stopPropagation()}
         onDoubleClick={(e) => {
@@ -254,16 +344,21 @@ export default function App() {
           selected={selectedId === comp.id}
           {...(comp.type === 'LED' ? { color: 'red', current: sim.readings[comp.id]?.i ?? 0 } : {})}
           {...(comp.type === 'Switch' ? { pressed: !!comp.pressed } : {})}
+          {...(comp.type === 'Wire' && comp.end
+            ? { dx: comp.end[0] - comp.position[0], dz: comp.end[1] - comp.position[2] }
+            : {})}
         />
       </group>
     );
   };
 
-  const hint = selectedType
-    ? `Placing ${selectedType} — tap the board to drop it`
-    : selectedId !== null
-      ? 'Drag to move · R = rotate · Delete = remove · double-click a button to press it'
-      : 'Pick a component, then click the board · drag placed parts to move them';
+  const hint = selectedType === 'Wire'
+    ? (wireStart ? 'Tap the second hole to finish the wire' : 'Tap the first hole to start a wire')
+    : selectedType
+      ? `Placing ${selectedType} — tap the board to drop it`
+      : selectedId !== null
+        ? 'Drag the selected part to move it · R = rotate · Delete = remove'
+        : 'Pick a component, then tap the board · tap a part to select, drag it again to move';
 
   return (
     <div style={{ width: '100%', height: '100%', position: 'relative', background: '#0a0a0a' }}>
@@ -271,8 +366,9 @@ export default function App() {
         <PerspectiveCamera makeDefault position={[0.6, 0.6, 0.6]} fov={40} />
         <color attach="background" args={['#0a0a0a']} />
 
-        <ambientLight intensity={0.5} />
-        <spotLight position={[5, 5, 5]} angle={0.2} penumbra={1} intensity={1.5} castShadow />
+        <ambientLight intensity={0.75} />
+        <hemisphereLight args={['#8899bb', '#332222', 0.5]} />
+        <spotLight position={[5, 5, 5]} angle={0.25} penumbra={1} intensity={2} castShadow />
         <pointLight position={[-5, 5, -5]} intensity={0.5} color="#4488ff" />
 
         <Breadboard
@@ -288,12 +384,51 @@ export default function App() {
           return comp ? <FaultEffects key={id} position={comp.position} kind={sim.faults[id]} /> : null;
         })}
 
-        {selectedType && hoverCell && (
+        {selectedType && selectedType !== 'Wire' && hoverCell && (
           <mesh position={hoverCell} rotation={[0, placementRotation, 0]}>
             <boxGeometry args={[0.14, 0.02, 0.045]} />
             <meshBasicMaterial color="#3b82f6" transparent opacity={0.6} depthWrite={false} />
           </mesh>
         )}
+        {selectedType === 'Wire' && hoverCell && !wireStart && (
+          <mesh position={hoverCell}>
+            <sphereGeometry args={[0.014, 12, 12]} />
+            <meshBasicMaterial color="#55ff55" transparent opacity={0.7} depthWrite={false} />
+          </mesh>
+        )}
+        {selectedType === 'Wire' && wireStart && (() => {
+          const sy = BOARD_TOP_Y + 0.015;
+          const start = [wireStart[0], sy, wireStart[1]];
+          if (!hoverCell) {
+            return (
+              <mesh position={start}>
+                <sphereGeometry args={[0.014, 12, 12]} />
+                <meshBasicMaterial color="#55ff55" depthWrite={false} />
+              </mesh>
+            );
+          }
+          const dx = hoverCell[0] - wireStart[0];
+          const dz = hoverCell[2] - wireStart[1];
+          const len = Math.max(Math.hypot(dx, dz), 0.01);
+          return (
+            <group position={start}>
+              <mesh>
+                <sphereGeometry args={[0.014, 12, 12]} />
+                <meshBasicMaterial color="#55ff55" depthWrite={false} />
+              </mesh>
+              <group position={[dx / 2, 0, dz / 2]} rotation={[0, Math.atan2(-dz, dx), 0]}>
+                <mesh rotation={[0, 0, Math.PI / 2]}>
+                  <cylinderGeometry args={[0.005, 0.005, len]} />
+                  <meshBasicMaterial color="#55ff55" transparent opacity={0.55} depthWrite={false} />
+                </mesh>
+              </group>
+              <mesh position={[dx, 0, dz]}>
+                <sphereGeometry args={[0.014, 12, 12]} />
+                <meshBasicMaterial color="#55ff55" transparent opacity={0.7} depthWrite={false} />
+              </mesh>
+            </group>
+          );
+        })()}
 
         {/* Terminal markers for the selected component */}
         {selectedComponent && terminalWorldPositions(selectedComponent, BOARD_TOP_Y + 0.005).map((p, i) => (
@@ -303,12 +438,7 @@ export default function App() {
           </mesh>
         ))}
 
-        <DragController
-          active={dragId !== null}
-          planeY={dragComponent ? dragComponent.position[1] : 0}
-          onDrag={handleDrag}
-          onEnd={endDrag}
-        />
+        <CanvasBridge ctxRef={canvasCtxRef} />
 
         <ContactShadows position={[0, -0.1, 0]} opacity={0.5} scale={10} blur={2.5} far={4} />
         <OrbitControls
@@ -341,13 +471,40 @@ export default function App() {
             <div style={{ background: '#3b82f6', padding: '6px', borderRadius: '6px', display: 'flex' }}>
               <Monitor size={18} color="white" />
             </div>
-            <h1 style={{ fontSize: '0.95rem', fontWeight: 700, margin: 0, whiteSpace: 'nowrap' }}>
+            <h1 style={{
+              fontSize: '0.95rem', fontWeight: 700, margin: 0,
+              whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+            }}>
               OpenCircuitry
               {!isMobile && <span style={{ color: '#444', fontWeight: 400 }}> | Virtual Electronics Lab</span>}
             </h1>
           </div>
 
-          <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+          <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexShrink: 0 }}>
+            <button
+              onClick={() => setShowProjects(true)}
+              title="Guided projects"
+              style={{
+                display: 'flex', alignItems: 'center', gap: '8px',
+                padding: isMobile ? '8px' : '7px 14px', cursor: 'pointer',
+                backgroundColor: '#1a1a1a', border: '1px solid #333', borderRadius: '6px',
+                color: '#ffcc55', fontSize: '0.85rem', fontWeight: 500,
+              }}
+            >
+              <Lightbulb size={16} />
+              {!isMobile && 'Projects'}
+            </button>
+            <button
+              onClick={() => setShowHelp(true)}
+              title="How to use the lab"
+              aria-label="Help"
+              style={{
+                display: 'flex', alignItems: 'center', padding: '8px', cursor: 'pointer',
+                backgroundColor: '#1a1a1a', border: '1px solid #333', borderRadius: '6px', color: '#888',
+              }}
+            >
+              <CircleHelp size={16} />
+            </button>
             <div style={{ display: 'flex', alignItems: 'center', background: '#1a1a1a', borderRadius: '6px', padding: '2px 8px', border: '1px solid #333' }}>
               <Layers size={14} color="#666" style={{ marginRight: '6px' }} />
               <select
@@ -478,11 +635,15 @@ export default function App() {
             {selectedType && (
               <>
                 <span style={{ ...chipStyle, cursor: 'default', color: '#3b82f6', borderColor: '#2a4a7a' }}>
-                  Placing {selectedType}
+                  {selectedType === 'Wire'
+                    ? (wireStart ? 'Tap 2nd hole' : 'Tap 1st hole')
+                    : `Placing ${selectedType}`}
                 </span>
-                <button onClick={() => rotatePlacement((r) => r + Math.PI / 2)} style={chipStyle} aria-label="Rotate placement">
-                  <RotateCw size={16} />
-                </button>
+                {selectedType !== 'Wire' && (
+                  <button onClick={() => rotatePlacement((r) => r + Math.PI / 2)} style={chipStyle} aria-label="Rotate placement">
+                    <RotateCw size={16} />
+                  </button>
+                )}
                 <button onClick={stopPlacing} style={chipStyle} aria-label="Stop placing">
                   <X size={16} />
                 </button>
@@ -545,6 +706,16 @@ export default function App() {
           </div>
         </div>
       </div>
+
+      {showHelp && (
+        <HelpModal
+          onClose={closeHelp}
+          onOpenProjects={() => { closeHelp(); setShowProjects(true); }}
+        />
+      )}
+      {showProjects && (
+        <ProjectsModal onClose={() => setShowProjects(false)} onLoad={loadProject} />
+      )}
     </div>
   );
 }
