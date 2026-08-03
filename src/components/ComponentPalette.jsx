@@ -1,9 +1,9 @@
 import {
-  Zap, Radio, Circle, Layout, Trash2, Cpu, Power, 
-  Wifi, Magnet as MagnetIcon, MousePointer2, ToggleLeft
+  Zap, Radio, Circle, Layout, Trash2, Cpu, Power,
+  Wifi, Magnet as MagnetIcon, MousePointer2, ToggleLeft, X
 } from 'lucide-react';
 
-export default function ComponentPalette({ onSelect, selectedType, onRemove, hasSelection }) {
+export default function ComponentPalette({ onSelect, selectedType, onRemove, hasSelection, onClose }) {
   const categories = [
     {
       name: 'Basic',
@@ -36,7 +36,9 @@ export default function ComponentPalette({ onSelect, selectedType, onRemove, has
   return (
     <div style={{
       width: 240,
-      background: 'rgba(15, 15, 15, 0.95)',
+      maxWidth: '85vw',
+      height: '100%',
+      background: 'rgba(15, 15, 15, 0.97)',
       color: 'white',
       padding: '16px',
       display: 'flex',
@@ -49,10 +51,19 @@ export default function ComponentPalette({ onSelect, selectedType, onRemove, has
       <div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
           <Layout size={20} className="text-blue-500" />
-          <h3 style={{ margin: 0, fontSize: '1rem', fontWeight: 600 }}>Components</h3>
+          <h3 style={{ margin: 0, fontSize: '1rem', fontWeight: 600, flex: 1 }}>Components</h3>
+          {onClose && (
+            <button
+              onClick={onClose}
+              aria-label="Close components"
+              style={{ background: 'transparent', border: 'none', color: '#888', cursor: 'pointer', padding: 6, display: 'flex' }}
+            >
+              <X size={18} />
+            </button>
+          )}
         </div>
         <p style={{ fontSize: '0.72rem', color: '#666', marginTop: '8px', lineHeight: 1.5 }}>
-          Pick a part, then click the board to place it. Click again for more, Esc to stop.
+          Pick a part, then tap the board to place it. Tap again for more.
         </p>
       </div>
 

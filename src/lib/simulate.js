@@ -19,6 +19,23 @@ export const DEFAULT_VALUES = {
   PowerSupply: 5,   // volts
 };
 
+// Absolute maximum ratings; exceeding one flags a fault (smoke/sparks in the
+// scene, warning in the multimeter).
+export const RATINGS = {
+  LED: { maxCurrent: 0.03 },        // 30 mA
+  Diode: { maxCurrent: 1 },         // 1N4001: 1 A
+  Resistor: { maxPower: 0.5 },      // ½ W
+  PowerSupply: { maxCurrent: 2 },   // bench supply current limit
+  Capacitor: { maxReverse: 1 },     // electrolytic: ~1 V reverse max
+};
+
+export const FAULT_MESSAGES = {
+  overcurrent: 'Overcurrent — exceeds the part\'s maximum forward current',
+  overpower: 'Over power rating (>½ W) — use a bigger resistor or lower voltage',
+  short: 'Short circuit — supply current limit exceeded',
+  'reverse-polarity': 'Electrolytic capacitor reversed — check + / − orientation',
+};
+
 const WIRE_G = 1e3;   // 1 mΩ jumper/closed switch
 const OFF_G = 1e-9;   // open switch, capacitor at DC, diode off
 const GMIN = 1e-9;    // node-to-ground leak to keep the matrix solvable
@@ -69,7 +86,7 @@ function solveLinear(A, b) {
 export function runSimulation(components) {
   const parts = components.filter((c) => TERMINALS[c.type]);
   const supplies = parts.filter((c) => c.type === 'PowerSupply');
-  if (supplies.length === 0) return { status: 'no-power', readings: {} };
+  if (supplies.length === 0) return { status: 'no-power', readings: {}, faults: {} };
 
   // Map every referenced hole to a node; the first supply's − post is ground.
   const cellKeysOf = new Map();
@@ -129,7 +146,7 @@ export function runSimulation(components) {
     });
 
     x = solveLinear(A, b);
-    if (!x) return { status: 'error', readings: {} };
+    if (!x) return { status: 'error', readings: {}, faults: {} };
 
     const volt = (node) => (node >= 0 ? x[node] : 0);
     let changed = false;
@@ -159,5 +176,17 @@ export function runSimulation(components) {
     readings[s.id] = { v: volt(a) - volt(c), i: -x[n + k] };
   });
 
-  return { status: 'ok', readings, nodes: n };
+  const faults = {};
+  for (const c of parts) {
+    const r = readings[c.id];
+    if (!r) continue;
+    const rating = RATINGS[c.type];
+    if (!rating) continue;
+    if (c.type === 'Resistor' && Math.abs(r.v * r.i) > rating.maxPower) faults[c.id] = 'overpower';
+    else if (c.type === 'PowerSupply' && Math.abs(r.i) > rating.maxCurrent) faults[c.id] = 'short';
+    else if (c.type === 'Capacitor' && r.v < -rating.maxReverse) faults[c.id] = 'reverse-polarity';
+    else if ((c.type === 'LED' || c.type === 'Diode') && Math.abs(r.i) > rating.maxCurrent) faults[c.id] = 'overcurrent';
+  }
+
+  return { status: 'ok', readings, faults, nodes: n };
 }

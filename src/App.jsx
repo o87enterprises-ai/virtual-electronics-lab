@@ -2,7 +2,9 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Canvas, useThree } from '@react-three/fiber';
 import { OrbitControls, ContactShadows, PerspectiveCamera } from '@react-three/drei';
 import * as THREE from 'three';
-import { Book, Monitor, Layers } from 'lucide-react';
+import {
+  Book, Monitor, Layers, PanelLeftOpen, Wrench, RotateCw, X, Trash2, CircleDot,
+} from 'lucide-react';
 
 import Breadboard from './components/Breadboard';
 import { BOARD_TYPES, BOARD_TOP_Y, snapToGrid } from './lib/constants';
@@ -10,6 +12,7 @@ import { runSimulation, terminalWorldPositions, DEFAULT_VALUES } from './lib/sim
 import ComponentPalette from './components/ComponentPalette';
 import InstrumentPanel from './components/InstrumentPanel';
 import Textbook from './components/Textbook';
+import FaultEffects from './components/FaultEffects';
 import {
   Resistor, LED, Capacitor, Diode, Transistor,
   IntegratedCircuit, Switch, PowerSupply, Antenna, Magnet, Wire,
@@ -28,6 +31,17 @@ const COMPONENT_VISUALS = {
   Resistor, LED, Capacitor, Diode, Transistor,
   IC: IntegratedCircuit, Switch, PowerSupply, Antenna, Magnet, Wire,
 };
+
+function useIsMobile() {
+  const [mobile, setMobile] = useState(() => window.matchMedia('(max-width: 768px)').matches);
+  useEffect(() => {
+    const mq = window.matchMedia('(max-width: 768px)');
+    const onChange = (e) => setMobile(e.matches);
+    mq.addEventListener('change', onChange);
+    return () => mq.removeEventListener('change', onChange);
+  }, []);
+  return mobile;
+}
 
 // While a drag is active, project pointer moves onto a horizontal plane at the
 // dragged component's height. Window-level listeners keep the drag alive even
@@ -63,7 +77,23 @@ function DragController({ active, planeY, onDrag, onEnd }) {
   return null;
 }
 
+const chipStyle = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 6,
+  padding: '9px 14px',
+  background: 'rgba(18, 18, 18, 0.92)',
+  border: '1px solid #3a3a3a',
+  borderRadius: 999,
+  color: '#eee',
+  fontSize: '0.8rem',
+  cursor: 'pointer',
+  pointerEvents: 'auto',
+  backdropFilter: 'blur(4px)',
+};
+
 export default function App() {
+  const isMobile = useIsMobile();
   const [showTextbook, setShowTextbook] = useState(false);
   const [placedComponents, setPlacedComponents] = useState([]);
   const [selectedType, setSelectedType] = useState(null);
@@ -71,6 +101,14 @@ export default function App() {
   const [dragId, setDragId] = useState(null);
   const [hoverCell, setHoverCell] = useState(null);
   const [boardType, setBoardType] = useState('HALF');
+  // null = no user choice yet → default open on desktop, closed on phones so
+  // the board owns the screen. A user's explicit toggle wins thereafter.
+  const [paletteChoice, setPaletteChoice] = useState(null);
+  const [rightChoice, setRightChoice] = useState(null);
+  const paletteOpen = paletteChoice ?? !isMobile;
+  const rightOpen = rightChoice ?? !isMobile;
+  const setPaletteOpen = setPaletteChoice;
+  const setRightOpen = setRightChoice;
   const [placementRotation, setPlacementRotation] = useState(0);
   // Mirror of placementRotation read inside canvas event handlers: the three.js
   // scene commits on its own schedule, so a captured prop can be stale for a
@@ -89,6 +127,7 @@ export default function App() {
   const dragComponent = placedComponents.find((c) => c.id === dragId) || null;
 
   const sim = useMemo(() => runSimulation(placedComponents), [placedComponents]);
+  const faultIds = Object.keys(sim.faults || {});
 
   const handleBoardClick = useCallback((point) => {
     if (selectedType) {
@@ -132,15 +171,27 @@ export default function App() {
     setSelectedId(null);
   }, [selectedId]);
 
+  const rotateSelected = useCallback(() => {
+    if (selectedId === null) return;
+    setPlacedComponents((prev) => prev.map((c) =>
+      c.id === selectedId ? { ...c, rotation: c.rotation + Math.PI / 2 } : c));
+  }, [selectedId]);
+
   const handlePaletteSelect = useCallback((type) => {
     setSelectedType((prev) => (prev === type ? null : type));
     setSelectedId(null);
     setHoverCell(null);
     rotatePlacement(0);
-  }, [rotatePlacement]);
+    if (isMobile) setPaletteOpen(false); // reveal the board for placement
+  }, [rotatePlacement, isMobile, setPaletteOpen]);
 
   const updateComponent = useCallback((id, patch) => {
     setPlacedComponents((prev) => prev.map((c) => (c.id === id ? { ...c, ...patch } : c)));
+  }, []);
+
+  const stopPlacing = useCallback(() => {
+    setSelectedType(null);
+    setHoverCell(null);
   }, []);
 
   useEffect(() => {
@@ -154,17 +205,13 @@ export default function App() {
         e.preventDefault();
         removeSelected();
       } else if (e.key === 'r' || e.key === 'R') {
-        if (selectedId !== null) {
-          setPlacedComponents((prev) => prev.map((c) =>
-            c.id === selectedId ? { ...c, rotation: c.rotation + Math.PI / 2 } : c));
-        } else {
-          rotatePlacement((r) => r + Math.PI / 2);
-        }
+        if (selectedId !== null) rotateSelected();
+        else rotatePlacement((r) => r + Math.PI / 2);
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [selectedId, removeSelected, rotatePlacement]);
+  }, [selectedId, removeSelected, rotateSelected, rotatePlacement]);
 
   const renderComponent = (comp) => {
     const Visual = COMPONENT_VISUALS[comp.type];
@@ -213,7 +260,7 @@ export default function App() {
   };
 
   const hint = selectedType
-    ? `Placing ${selectedType} — click the board · R = rotate · Esc = stop`
+    ? `Placing ${selectedType} — tap the board to drop it`
     : selectedId !== null
       ? 'Drag to move · R = rotate · Delete = remove · double-click a button to press it'
       : 'Pick a component, then click the board · drag placed parts to move them';
@@ -235,6 +282,11 @@ export default function App() {
           onHoverEnd={() => setHoverCell(null)}
         />
         {placedComponents.map(renderComponent)}
+
+        {faultIds.map((id) => {
+          const comp = placedComponents.find((c) => c.id === id);
+          return comp ? <FaultEffects key={id} position={comp.position} kind={sim.faults[id]} /> : null;
+        })}
 
         {selectedType && hoverCell && (
           <mesh position={hoverCell} rotation={[0, placementRotation, 0]}>
@@ -271,32 +323,33 @@ export default function App() {
         <gridHelper args={[10, 40, 0x151515, 0x111111]} position={[0, -0.11, 0]} />
       </Canvas>
 
-      {/* UI overlays — the layer itself and layout rows let pointer events pass
-          through to the canvas; only the actual panels re-enable them. */}
+      {/* UI overlays — the layer and layout rows pass pointer events through to
+          the canvas; panels and buttons re-enable them individually. */}
       <div className="ui-layer" style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
         {/* Top Header */}
         <div style={{
           background: 'rgba(15, 15, 15, 0.98)',
           color: 'white',
-          padding: '10px 20px',
+          padding: isMobile ? '8px 10px' : '10px 20px',
           display: 'flex',
           justifyContent: 'space-between',
           alignItems: 'center',
           borderBottom: '1px solid #222',
           pointerEvents: 'auto',
         }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-            <div style={{ background: '#3b82f6', padding: '6px', borderRadius: '6px' }}>
-              <Monitor size={20} color="white" />
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', minWidth: 0 }}>
+            <div style={{ background: '#3b82f6', padding: '6px', borderRadius: '6px', display: 'flex' }}>
+              <Monitor size={18} color="white" />
             </div>
-            <h1 style={{ fontSize: '1rem', fontWeight: 700, margin: 0 }}>
-              OpenCircuitry <span style={{ color: '#444', fontWeight: 400 }}>| Virtual Electronics Lab</span>
+            <h1 style={{ fontSize: '0.95rem', fontWeight: 700, margin: 0, whiteSpace: 'nowrap' }}>
+              OpenCircuitry
+              {!isMobile && <span style={{ color: '#444', fontWeight: 400 }}> | Virtual Electronics Lab</span>}
             </h1>
           </div>
 
-          <div style={{ display: 'flex', gap: '10px' }}>
+          <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
             <div style={{ display: 'flex', alignItems: 'center', background: '#1a1a1a', borderRadius: '6px', padding: '2px 8px', border: '1px solid #333' }}>
-              <Layers size={14} color="#666" style={{ marginRight: '8px' }} />
+              <Layers size={14} color="#666" style={{ marginRight: '6px' }} />
               <select
                 value={boardType}
                 onChange={(e) => setBoardType(e.target.value)}
@@ -304,7 +357,7 @@ export default function App() {
                   background: 'transparent',
                   color: '#eee',
                   border: 'none',
-                  padding: '4px 0',
+                  padding: '6px 0',
                   fontSize: '0.85rem',
                   cursor: 'pointer',
                   outline: 'none',
@@ -317,12 +370,18 @@ export default function App() {
             </div>
 
             <button
-              onClick={() => setShowTextbook(!showTextbook)}
+              onClick={() => {
+                setShowTextbook((v) => {
+                  const next = !v;
+                  if (next) setRightOpen(true);
+                  return next;
+                });
+              }}
               style={{
                 display: 'flex',
                 alignItems: 'center',
                 gap: '8px',
-                padding: '6px 14px',
+                padding: isMobile ? '8px' : '7px 14px',
                 cursor: 'pointer',
                 backgroundColor: showTextbook ? '#3b82f6' : '#1a1a1a',
                 border: '1px solid #333',
@@ -330,63 +389,159 @@ export default function App() {
                 color: 'white',
                 fontSize: '0.85rem',
                 fontWeight: 500,
-                transition: 'all 0.2s',
               }}
             >
               <Book size={16} />
-              {showTextbook ? 'Hide Textbook' : 'Lab Textbook'}
+              {!isMobile && (showTextbook ? 'Hide Textbook' : 'Lab Textbook')}
             </button>
           </div>
         </div>
 
-        {/* Main Content Area — pointer events stay off so the canvas underneath
-            receives clicks; each side panel re-enables them for itself. */}
-        <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
-          <ComponentPalette
-            onSelect={handlePaletteSelect}
-            selectedType={selectedType}
-            onRemove={removeSelected}
-            hasSelection={selectedId !== null}
-          />
-
-          <div style={{ flex: 1 }} />
-
-          {showTextbook ? (
-            <div style={{ width: '480px', height: '100%', pointerEvents: 'auto', borderLeft: '1px solid #222' }}>
-              <Textbook />
-            </div>
-          ) : (
-            <InstrumentPanel
-              selected={selectedComponent}
-              reading={selectedComponent ? sim.readings[selectedComponent.id] : null}
-              onUpdate={updateComponent}
+        {/* Main area: canvas shows through; drawers slide over it */}
+        <div style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
+          {/* Left drawer — component palette */}
+          <div style={{
+            position: 'absolute',
+            top: 0, left: 0, bottom: 0,
+            zIndex: 20,
+            display: 'flex',
+            transform: paletteOpen ? 'translateX(0)' : 'translateX(-110%)',
+            transition: 'transform 0.25s ease',
+            pointerEvents: paletteOpen ? 'auto' : 'none',
+          }}>
+            <ComponentPalette
+              onSelect={handlePaletteSelect}
+              selectedType={selectedType}
+              onRemove={removeSelected}
+              hasSelection={selectedId !== null}
+              onClose={() => setPaletteOpen(false)}
             />
+          </div>
+
+          {/* Right drawer — textbook or inspector/instruments */}
+          <div style={{
+            position: 'absolute',
+            top: 0, right: 0, bottom: 0,
+            zIndex: 20,
+            display: 'flex',
+            transform: rightOpen ? 'translateX(0)' : 'translateX(110%)',
+            transition: 'transform 0.25s ease',
+            pointerEvents: rightOpen ? 'auto' : 'none',
+          }}>
+            {showTextbook ? (
+              <div style={{ width: 'min(480px, 92vw)', height: '100%', background: 'rgba(15,15,15,0.97)', borderLeft: '1px solid #222', position: 'relative' }}>
+                <button
+                  onClick={() => setRightOpen(false)}
+                  style={{ ...chipStyle, position: 'absolute', top: 8, right: 8, zIndex: 2, padding: 8 }}
+                  aria-label="Close textbook"
+                >
+                  <X size={16} />
+                </button>
+                <Textbook />
+              </div>
+            ) : (
+              <InstrumentPanel
+                selected={selectedComponent}
+                reading={selectedComponent ? sim.readings[selectedComponent.id] : null}
+                fault={selectedComponent ? (sim.faults || {})[selectedComponent.id] : null}
+                onUpdate={updateComponent}
+                onRotate={rotateSelected}
+                onDelete={removeSelected}
+                onClose={() => setRightOpen(false)}
+              />
+            )}
+          </div>
+
+          {/* Floating openers when drawers are closed */}
+          {!paletteOpen && (
+            <button onClick={() => setPaletteOpen(true)} style={{ ...chipStyle, position: 'absolute', top: 10, left: 10, zIndex: 10 }}>
+              <PanelLeftOpen size={16} /> Parts
+            </button>
           )}
+          {!rightOpen && (
+            <button onClick={() => setRightOpen(true)} style={{ ...chipStyle, position: 'absolute', top: 10, right: 10, zIndex: 10 }}>
+              <Wrench size={16} /> {showTextbook ? 'Textbook' : 'Tools'}
+              {selectedComponent && <span style={{ width: 7, height: 7, borderRadius: '50%', background: '#3b82f6' }} />}
+            </button>
+          )}
+
+          {/* Floating action chips (touch-friendly; no keyboard needed) */}
+          <div style={{
+            position: 'absolute',
+            bottom: 12,
+            left: '50%',
+            transform: 'translateX(-50%)',
+            display: 'flex',
+            gap: 8,
+            zIndex: 15,
+          }}>
+            {selectedType && (
+              <>
+                <span style={{ ...chipStyle, cursor: 'default', color: '#3b82f6', borderColor: '#2a4a7a' }}>
+                  Placing {selectedType}
+                </span>
+                <button onClick={() => rotatePlacement((r) => r + Math.PI / 2)} style={chipStyle} aria-label="Rotate placement">
+                  <RotateCw size={16} />
+                </button>
+                <button onClick={stopPlacing} style={chipStyle} aria-label="Stop placing">
+                  <X size={16} />
+                </button>
+              </>
+            )}
+            {!selectedType && selectedComponent && (
+              <>
+                <button onClick={rotateSelected} style={chipStyle}>
+                  <RotateCw size={16} /> Rotate
+                </button>
+                {selectedComponent.type === 'Switch' && (
+                  <button
+                    onClick={() => updateComponent(selectedComponent.id, { pressed: !selectedComponent.pressed })}
+                    style={{ ...chipStyle, ...(selectedComponent.pressed ? { background: '#7a2222', borderColor: '#a33' } : {}) }}
+                  >
+                    <CircleDot size={16} /> {selectedComponent.pressed ? 'Release' : 'Press'}
+                  </button>
+                )}
+                <button onClick={removeSelected} style={{ ...chipStyle, color: '#ff7777' }}>
+                  <Trash2 size={16} /> Delete
+                </button>
+              </>
+            )}
+          </div>
         </div>
 
         {/* Bottom Status Bar */}
         <div style={{
           background: 'rgba(10, 10, 10, 0.95)',
           color: '#555',
-          padding: '6px 20px',
-          fontSize: '0.75rem',
+          padding: isMobile ? '6px 10px' : '6px 20px',
+          fontSize: '0.72rem',
           display: 'flex',
           justifyContent: 'space-between',
+          alignItems: 'center',
+          gap: 10,
           borderTop: '1px solid #222',
+          pointerEvents: 'auto',
         }}>
-          <div style={{ display: 'flex', gap: '20px' }}>
-            <span>Objects: {placedComponents.length}</span>
-            <span style={{ color: '#888' }}>{hint}</span>
+          <div style={{ display: 'flex', gap: '16px', minWidth: 0, overflow: 'hidden' }}>
+            <span style={{ whiteSpace: 'nowrap' }}>Objects: {placedComponents.length}</span>
+            {!isMobile && <span style={{ color: '#888', whiteSpace: 'nowrap' }}>{hint}</span>}
           </div>
-          <div style={{ display: 'flex', gap: '15px' }}>
-            <span>Rotate (Left) · Pan (Right) · Zoom (Scroll)</span>
-            <span style={{ display: 'flex', alignItems: 'center', gap: '4px', color: sim.status === 'ok' ? '#00cc66' : '#666' }}>
-              <div style={{ width: 6, height: 6, borderRadius: '50%', background: sim.status === 'ok' ? '#00cc66' : '#444' }} />
-              {sim.status === 'ok' ? `Simulating · ${sim.nodes + 1} nodes` : 'Add a DC power supply to simulate'}
+          <div style={{ display: 'flex', gap: '12px', alignItems: 'center', whiteSpace: 'nowrap' }}>
+            {faultIds.length > 0 && (
+              <span style={{ display: 'flex', alignItems: 'center', gap: 4, color: '#ff5544' }}>
+                <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#ff5544' }} />
+                {faultIds.length} fault{faultIds.length > 1 ? 's' : ''}
+              </span>
+            )}
+            <span style={{ display: 'flex', alignItems: 'center', gap: 4, color: sim.status === 'ok' ? '#00cc66' : '#666' }}>
+              <span style={{ width: 6, height: 6, borderRadius: '50%', background: sim.status === 'ok' ? '#00cc66' : '#444' }} />
+              {sim.status === 'ok' ? `Simulating · ${sim.nodes + 1} nodes` : (isMobile ? 'No power' : 'Add a DC power supply to simulate')}
             </span>
-            <span style={{ display: 'flex', alignItems: 'center', gap: '4px', color: '#3b82f6' }}>
-              <div style={{ width: 6, height: 6, borderRadius: '50%', background: '#3b82f6' }} /> {board.name}
-            </span>
+            {!isMobile && (
+              <span style={{ display: 'flex', alignItems: 'center', gap: 4, color: '#3b82f6' }}>
+                <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#3b82f6' }} /> {board.name}
+              </span>
+            )}
           </div>
         </div>
       </div>

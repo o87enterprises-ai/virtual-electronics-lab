@@ -1,4 +1,5 @@
-import { MousePointerClick, Gauge, Activity, AudioWaveform } from 'lucide-react';
+import { MousePointerClick, Gauge, Activity, AudioWaveform, X, RotateCw, Trash2, TriangleAlert } from 'lucide-react';
+import { FAULT_MESSAGES } from '../lib/simulate';
 
 const TYPE_LABELS = {
   Resistor: 'Resistor', LED: 'LED (Red)', Capacitor: 'Capacitor', Diode: 'Diode (1N4001)',
@@ -16,11 +17,13 @@ const fmt = (value, unit) => {
   return `0 ${unit}`;
 };
 
-export default function InstrumentPanel({ selected, reading, onUpdate }) {
+export default function InstrumentPanel({ selected, reading, fault, onUpdate, onRotate, onDelete, onClose }) {
   return (
     <div style={{
-      width: 220,
-      background: 'rgba(15, 15, 15, 0.95)',
+      width: 230,
+      maxWidth: '85vw',
+      height: '100%',
+      background: 'rgba(15, 15, 15, 0.97)',
       color: 'white',
       padding: 16,
       overflowY: 'auto',
@@ -31,9 +34,20 @@ export default function InstrumentPanel({ selected, reading, onUpdate }) {
       gap: 16,
     }}>
       <div>
-        <p style={{ fontSize: '0.7rem', color: '#666', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: 8 }}>
-          Inspector
-        </p>
+        <div style={{ display: 'flex', alignItems: 'center', marginBottom: 8 }}>
+          <p style={{ fontSize: '0.7rem', color: '#666', textTransform: 'uppercase', letterSpacing: '1px', flex: 1, margin: 0 }}>
+            Inspector
+          </p>
+          {onClose && (
+            <button
+              onClick={onClose}
+              aria-label="Close inspector"
+              style={{ background: 'transparent', border: 'none', color: '#888', cursor: 'pointer', padding: 6, display: 'flex' }}
+            >
+              <X size={18} />
+            </button>
+          )}
+        </div>
         {selected ? (
           <div style={{ background: '#1a1a1a', border: '1px solid #333', borderRadius: 6, padding: 10, fontSize: '0.8rem' }}>
             <div style={{ fontWeight: 600, marginBottom: 6 }}>{TYPE_LABELS[selected.type] || selected.type}</div>
@@ -90,8 +104,32 @@ export default function InstrumentPanel({ selected, reading, onUpdate }) {
               </button>
             )}
 
-            <div style={{ color: '#555', marginTop: 8, lineHeight: 1.5 }}>
-              Drag to move · <kbd>R</kbd> rotate · <kbd>Del</kbd> remove
+            {fault && (
+              <div style={{
+                display: 'flex', gap: 6, marginTop: 8, padding: 8,
+                background: '#2a1212', border: '1px solid #713', borderRadius: 4,
+                color: '#ff8877', fontSize: '0.72rem', lineHeight: 1.4,
+              }}>
+                <TriangleAlert size={14} style={{ flexShrink: 0, marginTop: 1 }} />
+                <span>{FAULT_MESSAGES[fault] || fault}</span>
+              </div>
+            )}
+
+            <div style={{ display: 'flex', gap: 6, marginTop: 10 }}>
+              <button onClick={onRotate} style={{
+                flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5,
+                padding: '8px 6px', background: '#2a2a2a', border: '1px solid #444',
+                borderRadius: 4, color: '#ddd', cursor: 'pointer', fontSize: '0.75rem',
+              }}>
+                <RotateCw size={13} /> Rotate
+              </button>
+              <button onClick={onDelete} style={{
+                flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5,
+                padding: '8px 6px', background: '#3a1a1a', border: '1px solid #644',
+                borderRadius: 4, color: '#ff9988', cursor: 'pointer', fontSize: '0.75rem',
+              }}>
+                <Trash2 size={13} /> Delete
+              </button>
             </div>
           </div>
         ) : (
@@ -112,9 +150,10 @@ export default function InstrumentPanel({ selected, reading, onUpdate }) {
               <Gauge size={14} color="#00cc66" /> <span style={{ color: '#ccc' }}>Multimeter</span>
             </div>
             {selected && reading ? (
-              <div style={{ fontFamily: 'monospace', fontSize: '0.85rem', color: '#00cc66', lineHeight: 1.6 }}>
+              <div style={{ fontFamily: 'monospace', fontSize: '0.85rem', color: fault ? '#ff7755' : '#00cc66', lineHeight: 1.6 }}>
                 <div>V: {fmt(reading.v, 'V')}</div>
                 <div>I: {fmt(reading.i, 'A')}</div>
+                <div>P: {fmt(Math.abs(reading.v * reading.i), 'W')}</div>
               </div>
             ) : selected && !SIMULATED.has(selected.type) ? (
               <div style={{ fontSize: '0.72rem', color: '#555' }}>This part isn&apos;t simulated yet</div>
