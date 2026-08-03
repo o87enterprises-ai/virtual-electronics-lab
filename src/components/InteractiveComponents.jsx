@@ -20,16 +20,27 @@ export function Resistor({ selected }) {
   );
 }
 
-export function LED({ color = 'red', selected }) {
+export function LED({ color = 'red', current = 0, selected }) {
+  const lit = current > 1e-4;
+  const glow = Math.min(current / 0.01, 1);
   return (
     <group>
       <mesh castShadow position={[0, 0.05, 0]}>
         <sphereGeometry args={[0.025, 16, 16]} />
-        <meshStandardMaterial color={color} emissive={color} emissiveIntensity={0.5} transparent opacity={0.8} />
+        <meshStandardMaterial
+          color={color}
+          emissive={color}
+          emissiveIntensity={0.3 + glow * 3}
+          transparent
+          opacity={0.85}
+        />
       </mesh>
+      {lit && <pointLight position={[0, 0.05, 0]} color={color} intensity={glow * 0.5} distance={0.6} />}
       <Cylinder args={[0.025, 0.025, 0.01]} position={[0, 0.02, 0]}><meshStandardMaterial color={color} /></Cylinder>
-      <Box args={[0.005, 0.05, 0.005]} position={[-0.01, 0, 0]}><meshStandardMaterial color="silver" /></Box>
-      <Box args={[0.005, 0.04, 0.005]} position={[0.01, -0.005, 0]}><meshStandardMaterial color="silver" /></Box>
+      {/* legs one hole either side of center: anode −x, cathode +x */}
+      <Box args={[0.005, 0.05, 0.005]} position={[-0.05, 0, 0]}><meshStandardMaterial color="silver" /></Box>
+      <Box args={[0.005, 0.04, 0.005]} position={[0.05, -0.005, 0]}><meshStandardMaterial color="silver" /></Box>
+      <Box args={[0.1, 0.004, 0.004]} position={[0, 0.022, 0]}><meshStandardMaterial color="silver" /></Box>
       <Highlight selected={selected} size={0.12} y={0.03} />
     </group>
   );
@@ -39,8 +50,9 @@ export function Capacitor({ selected }) {
   return (
     <group>
       <Cylinder castShadow args={[0.03, 0.03, 0.08]}><meshStandardMaterial color="#222" /></Cylinder>
-      <Box args={[0.005, 0.05, 0.005]} position={[-0.01, -0.05, 0]}><meshStandardMaterial color="silver" /></Box>
-      <Box args={[0.005, 0.05, 0.005]} position={[0.01, -0.05, 0]}><meshStandardMaterial color="silver" /></Box>
+      <Box args={[0.005, 0.05, 0.005]} position={[-0.05, -0.05, 0]}><meshStandardMaterial color="silver" /></Box>
+      <Box args={[0.005, 0.05, 0.005]} position={[0.05, -0.05, 0]}><meshStandardMaterial color="silver" /></Box>
+      <Box args={[0.1, 0.004, 0.004]} position={[0, -0.03, 0]}><meshStandardMaterial color="silver" /></Box>
       <Highlight selected={selected} size={0.12} />
     </group>
   );
@@ -53,7 +65,7 @@ export function Diode({ selected }) {
         <meshStandardMaterial color="#111" />
       </Cylinder>
       <Box args={[0.01, 0.04, 0.04]} position={[0.03, 0, 0]}><meshStandardMaterial color="silver" /></Box>
-      <Box args={[0.25, 0.005, 0.005]}><meshStandardMaterial color="silver" /></Box>
+      <Box args={[0.2, 0.005, 0.005]}><meshStandardMaterial color="silver" /></Box>
       <Highlight selected={selected} size={0.12} />
     </group>
   );
@@ -86,11 +98,13 @@ export function IntegratedCircuit({ pins = 8, selected }) {
   );
 }
 
-export function Switch({ selected }) {
+export function Switch({ pressed = false, selected }) {
   return (
     <group>
       <Box castShadow args={[0.08, 0.04, 0.08]}><meshStandardMaterial color="#333" /></Box>
-      <Cylinder args={[0.02, 0.02, 0.04]} position={[0, 0.03, 0]}><meshStandardMaterial color="#555" /></Cylinder>
+      <Cylinder args={[0.02, 0.02, 0.04]} position={[0, pressed ? 0.02 : 0.03, 0]}>
+        <meshStandardMaterial color={pressed ? '#cc4444' : '#555'} />
+      </Cylinder>
       <Highlight selected={selected} size={0.13} />
     </group>
   );

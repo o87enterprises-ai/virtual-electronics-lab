@@ -1,10 +1,12 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Canvas, useThree } from '@react-three/fiber';
 import { OrbitControls, ContactShadows, PerspectiveCamera } from '@react-three/drei';
 import * as THREE from 'three';
 import { Book, Monitor, Layers } from 'lucide-react';
 
-import Breadboard, { BOARD_TYPES, BOARD_TOP_Y, snapToGrid } from './components/Breadboard';
+import Breadboard from './components/Breadboard';
+import { BOARD_TYPES, BOARD_TOP_Y, snapToGrid } from './lib/constants';
+import { runSimulation, terminalWorldPositions, DEFAULT_VALUES } from './lib/simulate';
 import ComponentPalette from './components/ComponentPalette';
 import InstrumentPanel from './components/InstrumentPanel';
 import Textbook from './components/Textbook';
@@ -69,10 +71,24 @@ export default function App() {
   const [dragId, setDragId] = useState(null);
   const [hoverCell, setHoverCell] = useState(null);
   const [boardType, setBoardType] = useState('HALF');
+  const [placementRotation, setPlacementRotation] = useState(0);
+  // Mirror of placementRotation read inside canvas event handlers: the three.js
+  // scene commits on its own schedule, so a captured prop can be stale for a
+  // beat after pressing R — the ref is always current.
+  const placementRotationRef = useRef(0);
+  const rotatePlacement = useCallback((value) => {
+    placementRotationRef.current = typeof value === 'function' ? value(placementRotationRef.current) : value;
+    setPlacementRotation(placementRotationRef.current);
+  }, []);
+  // x/z offset between the grab point and the component origin, so a part
+  // doesn't jump to the cursor when picked up
+  const dragOffset = useRef([0, 0]);
 
   const board = BOARD_TYPES[boardType] || BOARD_TYPES.HALF;
   const selectedComponent = placedComponents.find((c) => c.id === selectedId) || null;
   const dragComponent = placedComponents.find((c) => c.id === dragId) || null;
+
+  const sim = useMemo(() => runSimulation(placedComponents), [placedComponents]);
 
   const handleBoardClick = useCallback((point) => {
     if (selectedType) {
@@ -81,7 +97,9 @@ export default function App() {
         id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
         type: selectedType,
         position: [x, restY(selectedType), z],
-        rotation: 0,
+        rotation: placementRotationRef.current,
+        ...(DEFAULT_VALUES[selectedType] !== undefined ? { value: DEFAULT_VALUES[selectedType] } : {}),
+        ...(selectedType === 'Switch' ? { pressed: false } : {}),
       }]);
       // selectedType stays active so several parts can be placed in a row
     } else {
@@ -98,7 +116,8 @@ export default function App() {
 
   const handleDrag = useCallback((point) => {
     if (dragId === null) return;
-    const [x, z] = snapToGrid(point, board);
+    const [ox, oz] = dragOffset.current;
+    const [x, z] = snapToGrid({ x: point.x + ox, z: point.z + oz }, board);
     setPlacedComponents((prev) => prev.map((c) =>
       c.id === dragId && (c.position[0] !== x || c.position[2] !== z)
         ? { ...c, position: [x, c.position[1], z] }
@@ -117,6 +136,11 @@ export default function App() {
     setSelectedType((prev) => (prev === type ? null : type));
     setSelectedId(null);
     setHoverCell(null);
+    rotatePlacement(0);
+  }, [rotatePlacement]);
+
+  const updateComponent = useCallback((id, patch) => {
+    setPlacedComponents((prev) => prev.map((c) => (c.id === id ? { ...c, ...patch } : c)));
   }, []);
 
   useEffect(() => {
@@ -129,14 +153,18 @@ export default function App() {
       } else if ((e.key === 'Delete' || e.key === 'Backspace') && selectedId !== null) {
         e.preventDefault();
         removeSelected();
-      } else if ((e.key === 'r' || e.key === 'R') && selectedId !== null) {
-        setPlacedComponents((prev) => prev.map((c) =>
-          c.id === selectedId ? { ...c, rotation: c.rotation + Math.PI / 2 } : c));
+      } else if (e.key === 'r' || e.key === 'R') {
+        if (selectedId !== null) {
+          setPlacedComponents((prev) => prev.map((c) =>
+            c.id === selectedId ? { ...c, rotation: c.rotation + Math.PI / 2 } : c));
+        } else {
+          rotatePlacement((r) => r + Math.PI / 2);
+        }
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [selectedId, removeSelected]);
+  }, [selectedId, removeSelected, rotatePlacement]);
 
   const renderComponent = (comp) => {
     const Visual = COMPONENT_VISUALS[comp.type];
@@ -148,11 +176,25 @@ export default function App() {
         rotation={[0, comp.rotation || 0, 0]}
         onPointerDown={(e) => {
           e.stopPropagation();
+          dragOffset.current = [comp.position[0] - e.point.x, comp.position[2] - e.point.z];
           setSelectedId(comp.id);
           setDragId(comp.id);
           document.body.style.cursor = 'grabbing';
+          // End the drag on the raw DOM event: waiting for a React effect to
+          // attach this listener can miss the release of a quick click,
+          // leaving the part glued to the cursor.
+          const end = () => {
+            setDragId(null);
+            document.body.style.cursor = 'auto';
+          };
+          window.addEventListener('pointerup', end, { once: true });
+          window.addEventListener('pointercancel', end, { once: true });
         }}
         onClick={(e) => e.stopPropagation()}
+        onDoubleClick={(e) => {
+          e.stopPropagation();
+          if (comp.type === 'Switch') updateComponent(comp.id, { pressed: !comp.pressed });
+        }}
         onPointerOver={(e) => {
           e.stopPropagation();
           if (dragId === null) document.body.style.cursor = 'grab';
@@ -161,15 +203,19 @@ export default function App() {
           if (dragId === null) document.body.style.cursor = 'auto';
         }}
       >
-        <Visual selected={selectedId === comp.id} {...(comp.type === 'LED' ? { color: 'red' } : {})} />
+        <Visual
+          selected={selectedId === comp.id}
+          {...(comp.type === 'LED' ? { color: 'red', current: sim.readings[comp.id]?.i ?? 0 } : {})}
+          {...(comp.type === 'Switch' ? { pressed: !!comp.pressed } : {})}
+        />
       </group>
     );
   };
 
   const hint = selectedType
-    ? `Placing ${selectedType} — click the board (Esc or re-click the palette to stop)`
+    ? `Placing ${selectedType} — click the board · R = rotate · Esc = stop`
     : selectedId !== null
-      ? 'Drag to move · R = rotate · Delete = remove · click empty board to deselect'
+      ? 'Drag to move · R = rotate · Delete = remove · double-click a button to press it'
       : 'Pick a component, then click the board · drag placed parts to move them';
 
   return (
@@ -191,11 +237,19 @@ export default function App() {
         {placedComponents.map(renderComponent)}
 
         {selectedType && hoverCell && (
-          <mesh position={hoverCell}>
-            <boxGeometry args={[0.045, 0.02, 0.045]} />
+          <mesh position={hoverCell} rotation={[0, placementRotation, 0]}>
+            <boxGeometry args={[0.14, 0.02, 0.045]} />
             <meshBasicMaterial color="#3b82f6" transparent opacity={0.6} depthWrite={false} />
           </mesh>
         )}
+
+        {/* Terminal markers for the selected component */}
+        {selectedComponent && terminalWorldPositions(selectedComponent, BOARD_TOP_Y + 0.005).map((p, i) => (
+          <mesh key={i} position={p}>
+            <sphereGeometry args={[0.012, 12, 12]} />
+            <meshBasicMaterial color={i === 0 ? '#ff5555' : '#5599ff'} depthWrite={false} transparent opacity={0.9} />
+          </mesh>
+        ))}
 
         <DragController
           active={dragId !== null}
@@ -302,7 +356,11 @@ export default function App() {
               <Textbook />
             </div>
           ) : (
-            <InstrumentPanel selected={selectedComponent} />
+            <InstrumentPanel
+              selected={selectedComponent}
+              reading={selectedComponent ? sim.readings[selectedComponent.id] : null}
+              onUpdate={updateComponent}
+            />
           )}
         </div>
 
@@ -322,6 +380,10 @@ export default function App() {
           </div>
           <div style={{ display: 'flex', gap: '15px' }}>
             <span>Rotate (Left) · Pan (Right) · Zoom (Scroll)</span>
+            <span style={{ display: 'flex', alignItems: 'center', gap: '4px', color: sim.status === 'ok' ? '#00cc66' : '#666' }}>
+              <div style={{ width: 6, height: 6, borderRadius: '50%', background: sim.status === 'ok' ? '#00cc66' : '#444' }} />
+              {sim.status === 'ok' ? `Simulating · ${sim.nodes + 1} nodes` : 'Add a DC power supply to simulate'}
+            </span>
             <span style={{ display: 'flex', alignItems: 'center', gap: '4px', color: '#3b82f6' }}>
               <div style={{ width: 6, height: 6, borderRadius: '50%', background: '#3b82f6' }} /> {board.name}
             </span>
