@@ -1,4 +1,4 @@
-import { X, MousePointerClick, Move, Spline, Gauge, Flame, Rotate3D, Lightbulb } from 'lucide-react';
+import { X, MousePointerClick, Move, Spline, Gauge, Flame, Rotate3D, Lightbulb, Power } from 'lucide-react';
 
 const Row = ({ icon, title, children }) => (
   <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
@@ -46,14 +46,21 @@ export default function HelpModal({ onClose, onOpenProjects }) {
           Open <em>Parts</em>, pick a component, then tap any breadboard hole to drop it.
           Keep tapping to place more; press the ✕ chip (or Esc) to stop. R rotates before placing.
         </Row>
-        <Row icon={<Move size={16} />} title="Select, then move">
-          Tap a part once to select it — red/blue dots mark its + / − terminals.
-          Drag a <em>selected</em> part to move it; a single tap never moves anything.
-          Use the floating chips (or R / Delete) to rotate, press buttons, or remove.
+        <Row icon={<Move size={16} />} title="Select, then choose an action">
+          Tap a part to select it — touching a part never moves it. Buttons appear
+          under the board: <strong>Move</strong> (arms dragging, or tap a hole to send
+          it there), <strong>Rotate</strong>, <strong>Action</strong>, and Delete.
         </Row>
-        <Row icon={<Spline size={16} />} title="Wire it up">
-          Pick <em>Jumper Wire</em>, then tap two holes — the wire spans them at any
-          length or angle automatically. Parts whose ends share a hole are connected.
+        <Row icon={<Power size={16} />} title="Using a part">
+          <strong>Action</strong> is how you operate something: it presses and releases
+          a push button, and switches the power supply&apos;s output on and off. Parts with
+          nothing to actuate simply have no Action button.
+        </Row>
+        <Row icon={<Spline size={16} />} title="Magnetic wiring">
+          Pick <em>Jumper Wire</em> and every terminal on the board lights up — red for
+          +, blue for −. Tap one, then tap another: the wire snaps onto both and routes
+          itself around anything in between, bending at right angles. Green rings mark
+          holes where leads genuinely meet, so you can see a connection took.
         </Row>
         <Row icon={<Gauge size={16} />} title="It's always simulating">
           Add a DC power supply (red post = +, black = −) and the whole board is solved

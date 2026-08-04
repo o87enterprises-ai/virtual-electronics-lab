@@ -125,15 +125,27 @@ export function Switch({ pressed = false, selected }) {
   );
 }
 
-export function PowerSupply({ selected }) {
+export function PowerSupply({ on = true, selected }) {
   return (
     <group>
       {/* Deliberately low-profile so it never hides the circuit behind it. */}
       <Box castShadow args={[0.26, 0.11, 0.26]}><meshStandardMaterial color="#9a9a9a" roughness={0.5} /></Box>
-      {/* front panel with a lit display strip */}
+      {/* front panel with a display that goes dark when the output is off */}
       <Box args={[0.24, 0.095, 0.006]} position={[0, 0, 0.132]}><meshStandardMaterial color="#333" /></Box>
       <Box args={[0.13, 0.03, 0.004]} position={[0, 0.03, 0.137]}>
-        <meshStandardMaterial color="#0a2818" emissive="#00cc66" emissiveIntensity={0.7} />
+        <meshStandardMaterial
+          color={on ? '#0a2818' : '#111111'}
+          emissive={on ? '#00cc66' : '#000000'}
+          emissiveIntensity={on ? 0.7 : 0}
+        />
+      </Box>
+      {/* power rocker on the panel: green = output live, dark red = off */}
+      <Box args={[0.035, 0.022, 0.012]} position={[0.088, 0.032, 0.134]}>
+        <meshStandardMaterial
+          color={on ? '#22cc55' : '#552222'}
+          emissive={on ? '#22cc55' : '#000000'}
+          emissiveIntensity={on ? 1 : 0}
+        />
       </Box>
       {/* binding posts: red = + (left), black = − (right) */}
       <Cylinder args={[0.019, 0.022, 0.05]} position={[-0.1, -0.025, 0.15]} rotation={[Math.PI / 2, 0, 0]}>
@@ -171,22 +183,45 @@ export function Magnet({ selected }) {
   );
 }
 
-// Variable-length jumper: dx/dz is the world-space offset from the start hole
-// (the component origin) to the end hole.
-export function Wire({ dx = 0.3, dz = 0, selected }) {
-  const len = Math.max(Math.hypot(dx, dz), 0.02);
-  const angle = Math.atan2(-dz, dx);
+// Jumper drawn along an auto-routed orthogonal path. `path` holds world-space
+// offsets from the wire's start hole, including any corner points.
+export function Wire({ path = [[0, 0], [0.3, 0]], selected }) {
+  const color = selected ? '#aaffaa' : '#55ff55';
+  const segments = [];
+  for (let k = 0; k < path.length - 1; k++) {
+    const [x1, z1] = path[k];
+    const [x2, z2] = path[k + 1];
+    const len = Math.hypot(x2 - x1, z2 - z1);
+    if (len < 1e-6) continue;
+    segments.push({
+      k,
+      len,
+      mid: [(x1 + x2) / 2, (z1 + z2) / 2],
+      angle: Math.atan2(-(z2 - z1), x2 - x1),
+    });
+  }
+  const last = path.length - 1;
   return (
     <group>
-      <group position={[dx / 2, 0, dz / 2]} rotation={[0, angle, 0]}>
-        <Cylinder castShadow args={[0.006, 0.006, len]} rotation={[0, 0, Math.PI / 2]}>
-          <meshStandardMaterial color="#55ff55" />
-        </Cylinder>
-        <Highlight selected={selected} size={Math.max(len * 0.5, 0.08)} />
-      </group>
-      {/* pin caps at each end */}
-      <Sphere args={[0.009, 10, 10]}><meshStandardMaterial color="#33cc33" /></Sphere>
-      <Sphere args={[0.009, 10, 10]} position={[dx, 0, dz]}><meshStandardMaterial color="#33cc33" /></Sphere>
+      {segments.map((s) => (
+        <group key={s.k} position={[s.mid[0], 0, s.mid[1]]} rotation={[0, s.angle, 0]}>
+          <Cylinder castShadow args={[0.0065, 0.0065, s.len]} rotation={[0, 0, Math.PI / 2]}>
+            <meshStandardMaterial color={color} emissive={selected ? '#227722' : '#000000'} />
+          </Cylinder>
+        </group>
+      ))}
+      {path.map(([x, z], k) => {
+        const endpoint = k === 0 || k === last;
+        return (
+          <Sphere key={k} args={[endpoint ? 0.011 : 0.0075, 10, 10]} position={[x, 0, z]}>
+            <meshStandardMaterial
+              color={endpoint ? '#22cc44' : color}
+              emissive={endpoint ? '#116622' : '#000000'}
+              emissiveIntensity={0.6}
+            />
+          </Sphere>
+        );
+      })}
     </group>
   );
 }

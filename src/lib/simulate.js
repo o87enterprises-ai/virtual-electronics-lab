@@ -91,8 +91,12 @@ function solveLinear(A, b) {
 // { v (volts across, first terminal minus second), i (amps through) }.
 export function runSimulation(components) {
   const parts = components.filter((c) => TERMINALS[c.type]);
-  const supplies = parts.filter((c) => c.type === 'PowerSupply');
-  if (supplies.length === 0) return { status: 'no-power', readings: {}, faults: {} };
+  const allSupplies = parts.filter((c) => c.type === 'PowerSupply');
+  // A supply switched off is an open output: it still defines the ground
+  // reference, but sources nothing.
+  const supplies = allSupplies.filter((c) => c.on !== false);
+  if (allSupplies.length === 0) return { status: 'no-power', readings: {}, faults: {} };
+  if (supplies.length === 0) return { status: 'powered-off', readings: {}, faults: {} };
 
   // Map every referenced hole to a node; the first supply's − post is ground.
   const cellKeysOf = new Map();
@@ -114,6 +118,8 @@ export function runSimulation(components) {
     else if (c.type === 'Capacitor') conductors.push({ comp: c, g: OFF_G });
     else if (DIODE_PARAMS[c.type]) diodes.push({ comp: c, ...DIODE_PARAMS[c.type], on: false });
   }
+  // switched-off supplies contribute nothing but still need readings
+  const idleSupplies = allSupplies.filter((c) => c.on === false);
 
   const nodesOf = (c) => cellKeysOf.get(c.id).map((k) => nodeIndex.get(k));
   const size = n + m;
@@ -181,6 +187,10 @@ export function runSimulation(components) {
     const [a, c] = nodesOf(s);
     readings[s.id] = { v: volt(a) - volt(c), i: -x[n + k] };
   });
+  for (const s of idleSupplies) {
+    const [a, c] = nodesOf(s);
+    readings[s.id] = { v: volt(a) - volt(c), i: 0 };
+  }
 
   const faults = {};
   for (const c of parts) {

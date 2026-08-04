@@ -92,8 +92,8 @@ export default function InstrumentPanel({ selected, reading, fault, onUpdate, on
                 style={{
                   marginTop: 8,
                   padding: '5px 10px',
-                  background: selected.pressed ? '#cc4444' : '#2a2a2a',
-                  border: '1px solid #444',
+                  background: selected.pressed ? '#14532d' : '#2a2a2a',
+                  border: `1px solid ${selected.pressed ? '#22c55e' : '#444'}`,
                   borderRadius: 4,
                   color: 'white',
                   cursor: 'pointer',
@@ -101,6 +101,23 @@ export default function InstrumentPanel({ selected, reading, fault, onUpdate, on
                 }}
               >
                 {selected.pressed ? 'Pressed (closed)' : 'Released (open)'}
+              </button>
+            )}
+            {selected.type === 'PowerSupply' && (
+              <button
+                onClick={() => onUpdate(selected.id, { on: selected.on === false })}
+                style={{
+                  marginTop: 8,
+                  padding: '5px 10px',
+                  background: selected.on !== false ? '#14532d' : '#2a2a2a',
+                  border: `1px solid ${selected.on !== false ? '#22c55e' : '#444'}`,
+                  borderRadius: 4,
+                  color: 'white',
+                  cursor: 'pointer',
+                  fontSize: '0.75rem',
+                }}
+              >
+                Output {selected.on !== false ? 'ON' : 'OFF'}
               </button>
             )}
 
@@ -157,6 +174,8 @@ export default function InstrumentPanel({ selected, reading, fault, onUpdate, on
               </div>
             ) : selected && !SIMULATED.has(selected.type) ? (
               <div style={{ fontSize: '0.72rem', color: '#555' }}>This part isn&apos;t simulated yet</div>
+            ) : selected && selected.type === 'PowerSupply' && selected.on === false ? (
+              <div style={{ fontSize: '0.72rem', color: '#555' }}>Output is off — press Turn On</div>
             ) : (
               <div style={{ fontSize: '0.72rem', color: '#555' }}>Select a part in a powered circuit</div>
             )}

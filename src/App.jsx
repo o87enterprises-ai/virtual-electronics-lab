@@ -4,12 +4,15 @@ import { OrbitControls, ContactShadows, PerspectiveCamera } from '@react-three/d
 import * as THREE from 'three';
 import {
   Book, Monitor, Layers, PanelLeftOpen, Wrench, RotateCw, X, Trash2, CircleDot,
-  Lightbulb, CircleHelp,
+  Lightbulb, CircleHelp, Move, Power,
 } from 'lucide-react';
 
 import Breadboard from './components/Breadboard';
 import { BOARD_TYPES, BOARD_TOP_Y, snapToGrid } from './lib/constants';
 import { runSimulation, terminalWorldPositions, DEFAULT_VALUES } from './lib/simulate';
+import {
+  blockedCells, routeCells, terminalTargets, junctionCells, wireRenderPath,
+} from './lib/routing';
 import ComponentPalette from './components/ComponentPalette';
 import InstrumentPanel from './components/InstrumentPanel';
 import Textbook from './components/Textbook';
@@ -100,13 +103,22 @@ export default function App() {
   // x/z offset between the grab point and the component origin, so a part
   // doesn't jump to the cursor when picked up
   const dragOffset = useRef([0, 0]);
+  // Movement is an explicit mode, not something a stray touch can trigger.
+  const [moveMode, setMoveMode] = useState(false);
+  const moveModeRef = useRef(false);
+  const setMove = useCallback((v) => {
+    moveModeRef.current = v;
+    setMoveMode(v);
+  }, []);
   // Mirror of selectedId for canvas handlers (same staleness reason as above):
   // a part only drags when it was already selected before the touch.
   const selectedIdRef = useRef(null);
   const selectPart = useCallback((id) => {
     selectedIdRef.current = id;
     setSelectedId(id);
-  }, []);
+    // a new selection always starts out un-armed for movement
+    setMove(false);
+  }, [setMove]);
   // Same again for the palette pick and board size, so the board's click
   // handler never acts on a stale placement mode.
   const selectedTypeRef = useRef(null);
@@ -138,6 +150,27 @@ export default function App() {
   const sim = useMemo(() => runSimulation(placedComponents), [placedComponents]);
   const faultIds = Object.keys(sim.faults || {});
 
+  // Solder points and real junctions, recomputed as the board changes.
+  const snapTargets = useMemo(() => terminalTargets(placedComponents), [placedComponents]);
+  const junctions = useMemo(() => junctionCells(placedComponents), [placedComponents]);
+  const wireObstacles = useMemo(() => blockedCells(placedComponents), [placedComponents]);
+  const snapTargetsRef = useRef(snapTargets);
+  useEffect(() => { snapTargetsRef.current = snapTargets; }, [snapTargets]);
+
+  // Magnetic snap: a tap near a component's terminal grabs that terminal
+  // rather than the raw hole under the cursor.
+  const SNAP_RADIUS = PITCH * 1.6;
+  const snapPoint = useCallback((point, brd) => {
+    let best = null;
+    for (const t of snapTargetsRef.current) {
+      const d = Math.hypot(t.world[0] - point.x, t.world[1] - point.z);
+      if (d <= SNAP_RADIUS && (!best || d < best.d)) best = { d, t };
+    }
+    if (best) return { pos: best.t.world, target: best.t };
+    const [x, z] = snapToGrid(point, brd);
+    return { pos: [x, z], target: null };
+  }, [SNAP_RADIUS]);
+
   // Reads every bit of placement context from refs: the three.js scene can
   // deliver events to a handler from a slightly older commit, so captured
   // props here would intermittently be one interaction behind.
@@ -145,18 +178,18 @@ export default function App() {
     const type = selectedTypeRef.current;
     const brd = boardRef.current || BOARD_TYPES.HALF;
     if (type === 'Wire') {
-      // Two-tap wires: first tap anchors the start, second tap sets the end
-      // and the jumper auto-spans whatever distance lies between.
-      const [x, z] = snapToGrid(point, brd);
+      // Two taps, each magnetically snapped to the nearest terminal: the wire
+      // then auto-routes around whatever sits between the two points.
+      const { pos } = snapPoint(point, brd);
       const start = wireStartRef.current;
       if (!start) {
-        setWireStartBoth([x, z]);
-      } else if (start[0] !== x || start[1] !== z) {
+        setWireStartBoth(pos);
+      } else if (start[0] !== pos[0] || start[1] !== pos[1]) {
         setPlacedComponents((prev) => [...prev, {
           id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
           type: 'Wire',
           position: [start[0], restY('Wire'), start[1]],
-          end: [x, z],
+          end: pos,
           rotation: 0,
         }]);
         setWireStartBoth(null);
@@ -170,19 +203,41 @@ export default function App() {
         rotation: placementRotationRef.current,
         ...(DEFAULT_VALUES[type] !== undefined ? { value: DEFAULT_VALUES[type] } : {}),
         ...(type === 'Switch' ? { pressed: false } : {}),
+        ...(type === 'PowerSupply' ? { on: true } : {}),
       }]);
       // the picked type stays active so several parts can be placed in a row
+    } else if (moveModeRef.current && selectedIdRef.current !== null) {
+      // Move mode: tapping a hole relocates the selected part there — the
+      // touch-friendly alternative to dragging.
+      const [x, z] = snapToGrid(point, brd);
+      const id = selectedIdRef.current;
+      setPlacedComponents((prev) => prev.map((c) => {
+        if (c.id !== id) return c;
+        const moved = { ...c, position: [x, c.position[1], z] };
+        if (c.end) moved.end = [c.end[0] + (x - c.position[0]), c.end[1] + (z - c.position[2])];
+        return moved;
+      }));
     } else {
       selectPart(null);
     }
-  }, [setWireStartBoth, selectPart]);
+  }, [setWireStartBoth, selectPart, snapPoint]);
 
   const handleBoardHover = useCallback((point) => {
-    if (!selectedType) return;
-    const [x, z] = snapToGrid(point, board);
+    const type = selectedTypeRef.current;
+    if (!type && !moveModeRef.current) return;
+    const brd = boardRef.current || BOARD_TYPES.HALF;
+    if (type === 'Wire') {
+      const { pos, target } = snapPoint(point, brd);
+      setHoverCell((prev) =>
+        prev && prev[0] === pos[0] && prev[2] === pos[1] && prev[3] === (target?.compId ?? null)
+          ? prev
+          : [pos[0], BOARD_TOP_Y + 0.015, pos[1], target?.compId ?? null]);
+      return;
+    }
+    const [x, z] = snapToGrid(point, brd);
     setHoverCell((prev) =>
       prev && prev[0] === x && prev[2] === z ? prev : [x, BOARD_TOP_Y + 0.015, z]);
-  }, [selectedType, board]);
+  }, [snapPoint]);
 
   const dragTo = useCallback((id, point) => {
     const [ox, oz] = dragOffset.current;
@@ -263,6 +318,31 @@ export default function App() {
     setPlacedComponents((prev) => prev.map((c) => (c.id === id ? { ...c, ...patch } : c)));
   }, []);
 
+  // What "Action" does depends on the part: buttons press, supplies switch on
+  // and off. Parts with nothing to actuate report null and hide the button.
+  const actionFor = (comp) => {
+    if (!comp) return null;
+    if (comp.type === 'Switch') {
+      return {
+        label: comp.pressed ? 'Release' : 'Press',
+        active: !!comp.pressed,
+        icon: <CircleDot size={16} />,
+        run: () => updateComponent(comp.id, { pressed: !comp.pressed }),
+      };
+    }
+    if (comp.type === 'PowerSupply') {
+      const on = comp.on !== false;
+      return {
+        label: on ? 'Turn Off' : 'Turn On',
+        active: on,
+        icon: <Power size={16} />,
+        run: () => updateComponent(comp.id, { on: !on }),
+      };
+    }
+    return null;
+  };
+  const selectedAction = actionFor(selectedComponent);
+
   const stopPlacing = useCallback(() => {
     selectType(null);
     setHoverCell(null);
@@ -318,14 +398,14 @@ export default function App() {
         rotation={[0, comp.rotation || 0, 0]}
         onPointerDown={(e) => {
           e.stopPropagation();
-          // Select-then-move: the first touch only selects. A part drags only
-          // when it was already selected, so browsing a circuit never
-          // accidentally rearranges it.
+          // Touching a part only ever selects it. Dragging is possible solely
+          // while Move is armed for that part, so browsing a circuit can never
+          // rearrange it by accident.
           if (selectedIdRef.current !== comp.id) {
             selectPart(comp.id);
             return;
           }
-          beginDrag(comp, e);
+          if (moveModeRef.current) beginDrag(comp, e);
         }}
         onClick={(e) => e.stopPropagation()}
         onDoubleClick={(e) => {
@@ -344,21 +424,28 @@ export default function App() {
           selected={selectedId === comp.id}
           {...(comp.type === 'LED' ? { color: 'red', current: sim.readings[comp.id]?.i ?? 0 } : {})}
           {...(comp.type === 'Switch' ? { pressed: !!comp.pressed } : {})}
-          {...(comp.type === 'Wire' && comp.end
-            ? { dx: comp.end[0] - comp.position[0], dz: comp.end[1] - comp.position[2] }
-            : {})}
+          {...(comp.type === 'PowerSupply' ? { on: comp.on !== false } : {})}
+          {...(comp.type === 'Wire' ? { path: wireRenderPath(comp, placedComponents) } : {})}
         />
       </group>
     );
   };
 
+  // Junction rings stay on while a wire is selected, so you can confirm a
+  // connection landed without re-entering the wire tool.
+  const showJunctions = selectedComponent?.type === 'Wire';
+
   const hint = selectedType === 'Wire'
-    ? (wireStart ? 'Tap the second hole to finish the wire' : 'Tap the first hole to start a wire')
+    ? (wireStart
+      ? 'Now tap the second terminal — the wire routes itself around anything between'
+      : 'Tap a red (+) or blue (−) terminal to start the wire')
     : selectedType
       ? `Placing ${selectedType} — tap the board to drop it`
-      : selectedId !== null
-        ? 'Drag the selected part to move it · R = rotate · Delete = remove'
-        : 'Pick a component, then tap the board · tap a part to select, drag it again to move';
+      : moveMode
+        ? 'Move mode: drag the part, or tap a hole to send it there'
+        : selectedId !== null
+          ? 'Use Move, Rotate or Action below · Delete removes'
+          : 'Pick a component, then tap the board · tap a placed part to select it';
 
   return (
     <div style={{ width: '100%', height: '100%', position: 'relative', background: '#0a0a0a' }}>
@@ -390,45 +477,67 @@ export default function App() {
             <meshBasicMaterial color="#3b82f6" transparent opacity={0.6} depthWrite={false} />
           </mesh>
         )}
-        {selectedType === 'Wire' && hoverCell && !wireStart && (
-          <mesh position={hoverCell}>
-            <sphereGeometry args={[0.014, 12, 12]} />
-            <meshBasicMaterial color="#55ff55" transparent opacity={0.7} depthWrite={false} />
-          </mesh>
-        )}
-        {selectedType === 'Wire' && wireStart && (() => {
-          const sy = BOARD_TOP_Y + 0.015;
-          const start = [wireStart[0], sy, wireStart[1]];
-          if (!hoverCell) {
-            return (
-              <mesh position={start}>
-                <sphereGeometry args={[0.014, 12, 12]} />
-                <meshBasicMaterial color="#55ff55" depthWrite={false} />
-              </mesh>
-            );
-          }
-          const dx = hoverCell[0] - wireStart[0];
-          const dz = hoverCell[2] - wireStart[1];
-          const len = Math.max(Math.hypot(dx, dz), 0.01);
+        {/* Magnetic solder points, shown whenever the wire tool is active */}
+        {selectedType === 'Wire' && snapTargets.map((t, i) => {
+          const hot = hoverCell && Math.abs(hoverCell[0] - t.world[0]) < 1e-6
+            && Math.abs(hoverCell[2] - t.world[1]) < 1e-6;
           return (
-            <group position={start}>
-              <mesh>
-                <sphereGeometry args={[0.014, 12, 12]} />
-                <meshBasicMaterial color="#55ff55" depthWrite={false} />
-              </mesh>
-              <group position={[dx / 2, 0, dz / 2]} rotation={[0, Math.atan2(-dz, dx), 0]}>
-                <mesh rotation={[0, 0, Math.PI / 2]}>
-                  <cylinderGeometry args={[0.005, 0.005, len]} />
-                  <meshBasicMaterial color="#55ff55" transparent opacity={0.55} depthWrite={false} />
+            <mesh key={`t${i}`} position={[t.world[0], BOARD_TOP_Y + 0.012, t.world[1]]}>
+              <sphereGeometry args={[hot ? 0.019 : 0.012, 12, 12]} />
+              <meshBasicMaterial
+                color={t.polarity === '+' ? '#ff5555' : '#5599ff'}
+                transparent
+                opacity={hot ? 1 : 0.75}
+                depthWrite={false}
+              />
+            </mesh>
+          );
+        })}
+
+        {/* Live preview of the routed run while wiring */}
+        {selectedType === 'Wire' && wireStart && (() => {
+          const sy = BOARD_TOP_Y + 0.016;
+          const a = [Math.round(wireStart[0] / PITCH), Math.round(wireStart[1] / PITCH)];
+          const pts = hoverCell
+            ? routeCells(a, [Math.round(hoverCell[0] / PITCH), Math.round(hoverCell[2] / PITCH)], wireObstacles)
+            : [a];
+          const world = pts.map(([i, j]) => [i * PITCH, j * PITCH]);
+          const segs = [];
+          for (let k = 0; k < world.length - 1; k++) {
+            const [x1, z1] = world[k];
+            const [x2, z2] = world[k + 1];
+            const len = Math.hypot(x2 - x1, z2 - z1);
+            if (len > 1e-6) {
+              segs.push({ k, len, mid: [(x1 + x2) / 2, (z1 + z2) / 2], angle: Math.atan2(-(z2 - z1), x2 - x1) });
+            }
+          }
+          return (
+            <group>
+              {segs.map((sg) => (
+                <group key={sg.k} position={[sg.mid[0], sy, sg.mid[1]]} rotation={[0, sg.angle, 0]}>
+                  <mesh rotation={[0, 0, Math.PI / 2]}>
+                    <cylinderGeometry args={[0.005, 0.005, sg.len]} />
+                    <meshBasicMaterial color="#55ff55" transparent opacity={0.6} depthWrite={false} />
+                  </mesh>
+                </group>
+              ))}
+              {world.map(([x, z], k) => (
+                <mesh key={`p${k}`} position={[x, sy, z]}>
+                  <sphereGeometry args={[k === 0 ? 0.016 : 0.011, 12, 12]} />
+                  <meshBasicMaterial color="#55ff55" transparent opacity={0.85} depthWrite={false} />
                 </mesh>
-              </group>
-              <mesh position={[dx, 0, dz]}>
-                <sphereGeometry args={[0.014, 12, 12]} />
-                <meshBasicMaterial color="#55ff55" transparent opacity={0.7} depthWrite={false} />
-              </mesh>
+              ))}
             </group>
           );
         })()}
+
+        {/* Green rings mark holes where two or more leads actually meet */}
+        {(selectedType === 'Wire' || showJunctions) && junctions.map(([i, j]) => (
+          <mesh key={`j${i},${j}`} position={[i * PITCH, BOARD_TOP_Y + 0.004, j * PITCH]} rotation={[-Math.PI / 2, 0, 0]}>
+            <ringGeometry args={[0.016, 0.023, 16]} />
+            <meshBasicMaterial color="#22ff88" transparent opacity={0.85} depthWrite={false} side={THREE.DoubleSide} />
+          </mesh>
+        ))}
 
         {/* Terminal markers for the selected component */}
         {selectedComponent && terminalWorldPositions(selectedComponent, BOARD_TOP_Y + 0.005).map((p, i) => (
@@ -634,9 +743,9 @@ export default function App() {
           }}>
             {selectedType && (
               <>
-                <span style={{ ...chipStyle, cursor: 'default', color: '#3b82f6', borderColor: '#2a4a7a' }}>
+                <span style={{ ...chipStyle, cursor: 'default', color: '#3b82f6', border: '1px solid #2a4a7a' }}>
                   {selectedType === 'Wire'
-                    ? (wireStart ? 'Tap 2nd hole' : 'Tap 1st hole')
+                    ? (wireStart ? 'Tap 2nd terminal' : 'Tap 1st terminal')
                     : `Placing ${selectedType}`}
                 </span>
                 {selectedType !== 'Wire' && (
@@ -651,15 +760,31 @@ export default function App() {
             )}
             {!selectedType && selectedComponent && (
               <>
+                <button
+                  onClick={() => setMove(!moveMode)}
+                  style={{
+                    ...chipStyle,
+                    ...(moveMode
+                      ? { background: '#1d4ed8', border: '1px solid #3b82f6', color: 'white' }
+                      : {}),
+                  }}
+                >
+                  <Move size={16} /> {moveMode ? 'Moving…' : 'Move'}
+                </button>
                 <button onClick={rotateSelected} style={chipStyle}>
                   <RotateCw size={16} /> Rotate
                 </button>
-                {selectedComponent.type === 'Switch' && (
+                {selectedAction && (
                   <button
-                    onClick={() => updateComponent(selectedComponent.id, { pressed: !selectedComponent.pressed })}
-                    style={{ ...chipStyle, ...(selectedComponent.pressed ? { background: '#7a2222', borderColor: '#a33' } : {}) }}
+                    onClick={selectedAction.run}
+                    style={{
+                      ...chipStyle,
+                      ...(selectedAction.active
+                        ? { background: '#14532d', border: '1px solid #22c55e', color: '#8ef0ab' }
+                        : {}),
+                    }}
                   >
-                    <CircleDot size={16} /> {selectedComponent.pressed ? 'Release' : 'Press'}
+                    {selectedAction.icon} {selectedAction.label}
                   </button>
                 )}
                 <button onClick={removeSelected} style={{ ...chipStyle, color: '#ff7777' }}>
@@ -696,7 +821,11 @@ export default function App() {
             )}
             <span style={{ display: 'flex', alignItems: 'center', gap: 4, color: sim.status === 'ok' ? '#00cc66' : '#666' }}>
               <span style={{ width: 6, height: 6, borderRadius: '50%', background: sim.status === 'ok' ? '#00cc66' : '#444' }} />
-              {sim.status === 'ok' ? `Simulating · ${sim.nodes + 1} nodes` : (isMobile ? 'No power' : 'Add a DC power supply to simulate')}
+              {sim.status === 'ok'
+                ? `Simulating · ${sim.nodes + 1} nodes`
+                : sim.status === 'powered-off'
+                  ? (isMobile ? 'Supply off' : 'Supply output is off — select it and press Turn On')
+                  : (isMobile ? 'No power' : 'Add a DC power supply to simulate')}
             </span>
             {!isMobile && (
               <span style={{ display: 'flex', alignItems: 'center', gap: 4, color: '#3b82f6' }}>
