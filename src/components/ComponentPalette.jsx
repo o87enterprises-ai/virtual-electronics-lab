@@ -1,9 +1,9 @@
 import {
-  Zap, Radio, Circle, Layout, Trash2, Cpu, Power,
+  Zap, Radio, Circle, Layout, Cpu, Power,
   Wifi, Magnet as MagnetIcon, MousePointer2, ToggleLeft, X
 } from 'lucide-react';
 
-export default function ComponentPalette({ onSelect, selectedType, onRemove, hasSelection, onClose }) {
+export default function ComponentPalette({ onSelect, selectedType, onClose }) {
   const categories = [
     {
       name: 'Basic',
@@ -63,7 +63,7 @@ export default function ComponentPalette({ onSelect, selectedType, onRemove, has
           )}
         </div>
         <p style={{ fontSize: '0.72rem', color: '#666', marginTop: '8px', lineHeight: 1.5 }}>
-          Pick a part, then tap the board to place it. Tap again for more.
+          Pick a part, then tap the board to place it. Tap again to place more.
         </p>
       </div>
 
@@ -102,30 +102,9 @@ export default function ComponentPalette({ onSelect, selectedType, onRemove, has
         </div>
       ))}
 
-      <div style={{ marginTop: 'auto', paddingTop: '16px', borderTop: '1px solid #333' }}>
-        <button
-          disabled={!hasSelection}
-          onClick={onRemove}
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            gap: '8px',
-            width: '100%',
-            padding: '10px',
-            background: hasSelection ? '#ef4444' : '#222',
-            color: hasSelection ? 'white' : '#555',
-            border: 'none',
-            borderRadius: '6px',
-            cursor: hasSelection ? 'pointer' : 'default',
-            fontSize: '0.9rem',
-            transition: 'all 0.2s'
-          }}
-        >
-          <Trash2 size={16} />
-          <span>Remove Item</span>
-        </button>
-      </div>
+      <p style={{ marginTop: 'auto', paddingTop: '12px', borderTop: '1px solid #333', fontSize: '0.7rem', color: '#666', lineHeight: 1.5 }}>
+        To change, move or delete a part, click it on the board. Everything is in its menu.
+      </p>
     </div>
   );
 }

@@ -1,11 +1,11 @@
 import { PITCH } from './constants.js';
-import { terminalCells, TERMINALS } from './simulate.js';
+import { terminalCells, TERMINALS, TERMINAL_NAMES } from './simulate.js';
 
 // Half-extents of each part's body in grid cells, before rotation. Used so
 // jumper wires route around components instead of through them.
 const FOOTPRINT = {
-  Resistor: [3, 0], Diode: [2, 0], LED: [1, 1], Capacitor: [1, 1],
-  Transistor: [1, 1], IC: [2, 2], Switch: [1, 1], PowerSupply: [3, 3],
+  Resistor: [3, 0], Diode: [2, 0], LED: [1, 0], Capacitor: [1, 1],
+  Transistor: [1, 0], IC: [2, 2], Switch: [1, 0], PowerSupply: [3, 3],
   Antenna: [0, 0], Magnet: [2, 1],
 };
 
@@ -49,7 +49,7 @@ export function terminalTargets(components) {
         type: c.type,
         cell: [i, j],
         world: [i * PITCH, j * PITCH],
-        polarity: cells.length === 2 ? (idx === 0 ? '+' : '−') : '',
+        polarity: cells.length === 2 ? (idx === 0 ? '+' : '−') : (TERMINAL_NAMES[c.type]?.[idx] ?? ''),
       });
     });
   }

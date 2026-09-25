@@ -80,8 +80,12 @@ export function Transistor({ selected }) {
         <meshStandardMaterial color="#222" />
       </mesh>
       <Box args={[0.06, 0.06, 0.01]} position={[0, 0.03, 0]}><meshStandardMaterial color="#222" /></Box>
-      {[-0.015, 0, 0.015].map((x, i) => (
-        <Box key={i} args={[0.005, 0.06, 0.005]} position={[x, -0.02, 0]}><meshStandardMaterial color="silver" /></Box>
+      {/* legs splay out to one hole apart: collector −x, base centre, emitter +x */}
+      {[-0.05, 0, 0.05].map((x, i) => (
+        <group key={i}>
+          <Box args={[0.005, 0.06, 0.005]} position={[x, -0.02, 0]}><meshStandardMaterial color="silver" /></Box>
+          <Box args={[Math.abs(x) + 0.005, 0.004, 0.004]} position={[x / 2, 0.008, 0]}><meshStandardMaterial color="silver" /></Box>
+        </group>
       ))}
       <Highlight selected={selected} size={0.12} y={0.02} />
     </group>

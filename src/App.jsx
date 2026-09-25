@@ -1,20 +1,24 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { Canvas, useThree } from '@react-three/fiber';
-import { OrbitControls, ContactShadows, PerspectiveCamera } from '@react-three/drei';
+import { Canvas, useThree, useFrame } from '@react-three/fiber';
+import { OrbitControls, ContactShadows, PerspectiveCamera, Html } from '@react-three/drei';
 import * as THREE from 'three';
 import {
-  Book, Monitor, Layers, PanelLeftOpen, Wrench, RotateCw, X, Trash2, CircleDot,
-  Lightbulb, CircleHelp, Move, Power,
+  Book, Monitor, Layers, PanelLeftOpen, RotateCw, X, Lightbulb, CircleHelp, Stethoscope,
+  ArrowRight, CircleCheck,
 } from 'lucide-react';
 
 import Breadboard from './components/Breadboard';
 import { BOARD_TYPES, BOARD_TOP_Y, snapToGrid } from './lib/constants';
-import { runSimulation, terminalWorldPositions, DEFAULT_VALUES } from './lib/simulate';
 import {
-  blockedCells, routeCells, terminalTargets, junctionCells, wireRenderPath,
+  runSimulation, terminalWorldPositions, terminalCells, DEFAULT_VALUES, LED_COLORS,
+} from './lib/simulate';
+import { checkProject, checkCircuit, projectComponents } from './lib/coach';
+import {
+  blockedCells, routeCells, terminalTargets, junctionCells, wireRenderPath, footprintCells,
 } from './lib/routing';
 import ComponentPalette from './components/ComponentPalette';
-import InstrumentPanel from './components/InstrumentPanel';
+import PartMenu from './components/PartMenu';
+import CoachPanel from './components/CoachPanel';
 import Textbook from './components/Textbook';
 import FaultEffects from './components/FaultEffects';
 import HelpModal from './components/HelpModal';
@@ -59,6 +63,63 @@ function CanvasBridge({ ctxRef }) {
   return null;
 }
 
+// Terminal marker colours: + / anode red, − / cathode blue, transistor C-B-E.
+const terminalColor = (type, idx) => (type === 'Transistor'
+  ? ['#ff9944', '#ffee55', '#5599ff'][idx]
+  : idx === 0 ? '#ff5555' : '#5599ff');
+
+// A breathing ring marking a hole the coach wants you to look at.
+function PulseRing({ cell, color = '#ffdd33' }) {
+  const ref = useRef();
+  useFrame(({ clock }) => {
+    if (!ref.current) return;
+    const s = 1 + 0.35 * Math.sin(clock.getElapsedTime() * 6);
+    ref.current.scale.set(s, s, s);
+  });
+  return (
+    <mesh ref={ref} position={[cell[0] * PITCH, BOARD_TOP_Y + 0.006, cell[1] * PITCH]} rotation={[-Math.PI / 2, 0, 0]}>
+      <ringGeometry args={[0.018, 0.028, 24]} />
+      <meshBasicMaterial color={color} transparent opacity={0.95} depthWrite={false} side={THREE.DoubleSide} />
+    </mesh>
+  );
+}
+
+// Translucent stand-in showing where the guide puts the next part.
+function GhostPart({ comp, label }) {
+  const fp = footprintCells(comp);
+  const is = fp.map((c) => c[0]);
+  const js = fp.map((c) => c[1]);
+  const [i0, i1, j0, j1] = [Math.min(...is), Math.max(...is), Math.min(...js), Math.max(...js)];
+  const center = [((i0 + i1) / 2) * PITCH, ((j0 + j1) / 2) * PITCH];
+  return (
+    <group>
+      <mesh position={[center[0], BOARD_TOP_Y + 0.004, center[1]]}>
+        <boxGeometry args={[(i1 - i0 + 0.8) * PITCH, 0.006, (j1 - j0 + 0.8) * PITCH]} />
+        <meshBasicMaterial color="#3b82f6" transparent opacity={0.28} depthWrite={false} />
+      </mesh>
+      {terminalCells(comp).map(([i, j], k) => (
+        <PulseRing key={k} cell={[i, j]} color={terminalColor(comp.type, k)} />
+      ))}
+      <Html position={[center[0], BOARD_TOP_Y + 0.05, center[1]]} center zIndexRange={[9, 0]} style={{ pointerEvents: 'none' }}>
+        <div style={{
+          background: 'rgba(29, 78, 216, 0.92)', color: 'white', fontSize: 11, fontWeight: 600,
+          padding: '3px 8px', borderRadius: 999, whiteSpace: 'nowrap', fontFamily: 'system-ui, sans-serif',
+        }}>
+          {label}
+        </div>
+      </Html>
+    </group>
+  );
+}
+
+const headerBtn = (active, compact) => ({
+  display: 'flex', alignItems: 'center', gap: 8,
+  padding: compact ? '8px' : '7px 14px', cursor: 'pointer',
+  backgroundColor: active ? '#3b82f6' : '#1a1a1a',
+  border: '1px solid #333', borderRadius: 6,
+  color: 'white', fontSize: '0.85rem', fontWeight: 500,
+});
+
 const chipStyle = {
   display: 'flex',
   alignItems: 'center',
@@ -76,7 +137,8 @@ const chipStyle = {
 
 export default function App() {
   const isMobile = useIsMobile();
-  const [showTextbook, setShowTextbook] = useState(false);
+  // Right drawer shows the Circuit Coach or the textbook.
+  const [rightTab, setRightTab] = useState('coach');
   const [placedComponents, setPlacedComponents] = useState([]);
   const [selectedType, setSelectedType] = useState(null);
   const [selectedId, setSelectedId] = useState(null);
@@ -103,22 +165,26 @@ export default function App() {
   // x/z offset between the grab point and the component origin, so a part
   // doesn't jump to the cursor when picked up
   const dragOffset = useRef([0, 0]);
-  // Movement is an explicit mode, not something a stray touch can trigger.
-  const [moveMode, setMoveMode] = useState(false);
-  const moveModeRef = useRef(false);
-  const setMove = useCallback((v) => {
-    moveModeRef.current = v;
-    setMoveMode(v);
-  }, []);
-  // Mirror of selectedId for canvas handlers (same staleness reason as above):
-  // a part only drags when it was already selected before the touch.
+  // Mirror of selectedId for canvas handlers (same staleness reason as above).
+  // Selecting a part is what opens its menu.
   const selectedIdRef = useRef(null);
   const selectPart = useCallback((id) => {
     selectedIdRef.current = id;
     setSelectedId(id);
-    // a new selection always starts out un-armed for movement
-    setMove(false);
-  }, [setMove]);
+  }, []);
+  // "Move" from the part menu: the part rides the cursor until a tap drops
+  // it. `origin` lets Esc put it back where it was.
+  const [carryId, setCarryId] = useState(null);
+  const carryRef = useRef(null);
+  const setCarry = useCallback((v) => {
+    carryRef.current = v;
+    setCarryId(v ? v.id : null);
+  }, []);
+  // Guided project the coach is following (null = free build).
+  const [activeProject, setActiveProject] = useState(null);
+  const [showGhost, setShowGhost] = useState(true);
+  // Holes / parts the coach is pointing at after "Show me".
+  const [highlight, setHighlight] = useState(null);
   // Same again for the palette pick and board size, so the board's click
   // handler never acts on a stale placement mode.
   const selectedTypeRef = useRef(null);
@@ -141,6 +207,16 @@ export default function App() {
     localStorage.setItem('oc-welcome-seen', '1');
     setShowHelp(false);
   }, []);
+
+  // Header buttons open a drawer tab, or close it if it's already showing.
+  const toggleRight = useCallback((tab, forceOpen = false) => {
+    if (!forceOpen && rightOpen && rightTab === tab) {
+      setRightOpen(false);
+      return;
+    }
+    setRightTab(tab);
+    setRightOpen(true);
+  }, [rightOpen, rightTab, setRightOpen]);
 
   const board = BOARD_TYPES[boardType] || BOARD_TYPES.HALF;
   useEffect(() => { boardRef.current = board; }, [board]);
@@ -174,9 +250,26 @@ export default function App() {
   // Reads every bit of placement context from refs: the three.js scene can
   // deliver events to a handler from a slightly older commit, so captured
   // props here would intermittently be one interaction behind.
+  // Put a part (and a wire's far end with it) at a hole.
+  const moveTo = useCallback((id, x, z) => {
+    setPlacedComponents((prev) => prev.map((c) => {
+      if (c.id !== id || (c.position[0] === x && c.position[2] === z)) return c;
+      const moved = { ...c, position: [x, c.position[1], z] };
+      if (c.end) moved.end = [c.end[0] + (x - c.position[0]), c.end[1] + (z - c.position[2])];
+      return moved;
+    }));
+  }, []);
+
   const handleBoardClick = useCallback((point) => {
     const type = selectedTypeRef.current;
     const brd = boardRef.current || BOARD_TYPES.HALF;
+    if (carryRef.current) {
+      // A carried part drops into the tapped hole; its menu comes back.
+      const [x, z] = snapToGrid(point, brd);
+      moveTo(carryRef.current.id, x, z);
+      setCarry(null);
+      return;
+    }
     if (type === 'Wire') {
       // Two taps, each magnetically snapped to the nearest terminal: the wire
       // then auto-routes around whatever sits between the two points.
@@ -206,26 +299,21 @@ export default function App() {
         ...(type === 'PowerSupply' ? { on: true } : {}),
       }]);
       // the picked type stays active so several parts can be placed in a row
-    } else if (moveModeRef.current && selectedIdRef.current !== null) {
-      // Move mode: tapping a hole relocates the selected part there — the
-      // touch-friendly alternative to dragging.
-      const [x, z] = snapToGrid(point, brd);
-      const id = selectedIdRef.current;
-      setPlacedComponents((prev) => prev.map((c) => {
-        if (c.id !== id) return c;
-        const moved = { ...c, position: [x, c.position[1], z] };
-        if (c.end) moved.end = [c.end[0] + (x - c.position[0]), c.end[1] + (z - c.position[2])];
-        return moved;
-      }));
     } else {
       selectPart(null);
     }
-  }, [setWireStartBoth, selectPart, snapPoint]);
+  }, [setWireStartBoth, selectPart, snapPoint, moveTo, setCarry]);
 
   const handleBoardHover = useCallback((point) => {
     const type = selectedTypeRef.current;
-    if (!type && !moveModeRef.current) return;
     const brd = boardRef.current || BOARD_TYPES.HALF;
+    if (carryRef.current) {
+      // the carried part follows the cursor hole by hole
+      const [x, z] = snapToGrid(point, brd);
+      moveTo(carryRef.current.id, x, z);
+      return;
+    }
+    if (!type) return;
     if (type === 'Wire') {
       const { pos, target } = snapPoint(point, brd);
       setHoverCell((prev) =>
@@ -237,53 +325,85 @@ export default function App() {
     const [x, z] = snapToGrid(point, brd);
     setHoverCell((prev) =>
       prev && prev[0] === x && prev[2] === z ? prev : [x, BOARD_TOP_Y + 0.015, z]);
-  }, [snapPoint]);
+  }, [snapPoint, moveTo]);
 
-  const dragTo = useCallback((id, point) => {
-    const [ox, oz] = dragOffset.current;
-    const [x, z] = snapToGrid({ x: point.x + ox, z: point.z + oz }, boardRef.current || BOARD_TYPES.HALF);
-    setPlacedComponents((prev) => prev.map((c) => {
-      if (c.id !== id || (c.position[0] === x && c.position[2] === z)) return c;
-      const moved = { ...c, position: [x, c.position[1], z] };
-      if (c.end) moved.end = [c.end[0] + (x - c.position[0]), c.end[1] + (z - c.position[2])];
-      return moved;
-    }));
-  }, []);
-
-  // Starts a drag entirely with DOM listeners: raycast pointer moves onto a
-  // horizontal plane at the part's height and move the part along it.
-  const beginDrag = useCallback((comp, e) => {
+  // Pressing a part. A plain click (or tap) opens its menu — or closes it if
+  // it was already open. With a mouse, pressing and dragging moves the part
+  // directly; on touch a drag stays a camera gesture, so browsing a circuit
+  // with your fingers can't rearrange it.
+  const pressPart = useCallback((comp, e) => {
+    // While placing or wiring, a click on a part is meant for the hole (or
+    // terminal) beneath it, so let the event carry on to the board.
+    if (selectedTypeRef.current) return;
+    e.stopPropagation();
+    if (carryRef.current) {
+      setCarry(null); // the carried part is under the cursor: drop it here
+      return;
+    }
     const ctx = canvasCtxRef.current;
-    if (!ctx) return;
-    dragOffset.current = [comp.position[0] - e.point.x, comp.position[2] - e.point.z];
-    setDragId(comp.id);
-    if (ctx.controls) ctx.controls.enabled = false;
-    document.body.style.cursor = 'grabbing';
-
+    const ne = e.nativeEvent;
+    const mouse = ne.pointerType === 'mouse';
+    const start = [ne.clientX, ne.clientY];
+    const grab = [comp.position[0] - e.point.x, comp.position[2] - e.point.z];
     const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -comp.position[1]);
     const raycaster = new THREE.Raycaster();
     const ndc = new THREE.Vector2();
     const hit = new THREE.Vector3();
+    let state = 'pending'; // → 'drag' (mouse moved) or 'gesture' (finger moved)
+    if (mouse && ctx?.controls) ctx.controls.enabled = false;
+
     const onMove = (ev) => {
+      if (state === 'pending') {
+        if (Math.hypot(ev.clientX - start[0], ev.clientY - start[1]) < (mouse ? 5 : 10)) return;
+        if (!mouse) { state = 'gesture'; return; }
+        state = 'drag';
+        dragOffset.current = grab;
+        setDragId(comp.id);
+        if (selectedIdRef.current !== comp.id) selectPart(null);
+        document.body.style.cursor = 'grabbing';
+      }
+      if (state !== 'drag' || !ctx) return;
       const rect = ctx.gl.domElement.getBoundingClientRect();
       ndc.set(
         ((ev.clientX - rect.left) / rect.width) * 2 - 1,
         -((ev.clientY - rect.top) / rect.height) * 2 + 1,
       );
       raycaster.setFromCamera(ndc, ctx.camera);
-      if (raycaster.ray.intersectPlane(plane, hit)) dragTo(comp.id, hit);
+      if (raycaster.ray.intersectPlane(plane, hit)) {
+        const [ox, oz] = dragOffset.current;
+        const [x, z] = snapToGrid({ x: hit.x + ox, z: hit.z + oz }, boardRef.current || BOARD_TYPES.HALF);
+        moveTo(comp.id, x, z);
+      }
     };
-    const end = () => {
+    const onUp = () => {
       window.removeEventListener('pointermove', onMove);
-      window.removeEventListener('pointercancel', end);
-      setDragId(null);
-      if (ctx.controls) ctx.controls.enabled = true;
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onUp);
+      if (ctx?.controls) ctx.controls.enabled = true;
       document.body.style.cursor = 'auto';
+      if (state === 'drag') setDragId(null);
+      else if (state === 'pending') selectPart(selectedIdRef.current === comp.id ? null : comp.id);
     };
     window.addEventListener('pointermove', onMove);
-    window.addEventListener('pointerup', end, { once: true });
-    window.addEventListener('pointercancel', end);
-  }, [dragTo]);
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onUp);
+  }, [moveTo, selectPart, setCarry]);
+
+  const startCarry = useCallback(() => {
+    const comp = placedComponents.find((c) => c.id === selectedIdRef.current);
+    if (!comp) return;
+    selectType(null);
+    setCarry({ id: comp.id, position: comp.position, end: comp.end });
+  }, [placedComponents, selectType, setCarry]);
+
+  const cancelCarry = useCallback(() => {
+    const c = carryRef.current;
+    if (!c) return;
+    setPlacedComponents((prev) => prev.map((p) => (p.id === c.id
+      ? { ...p, position: c.position, ...(c.end ? { end: c.end } : {}) }
+      : p)));
+    setCarry(null);
+  }, [setCarry]);
 
   const removeSelected = useCallback(() => {
     if (selectedId === null) return;
@@ -306,42 +426,19 @@ export default function App() {
   }, [selectedId]);
 
   const handlePaletteSelect = useCallback((type) => {
+    if (carryRef.current) cancelCarry();
     selectType((prev) => (prev === type ? null : type));
     selectPart(null);
     setHoverCell(null);
     setWireStartBoth(null);
     rotatePlacement(0);
     if (isMobile) setPaletteOpen(false); // reveal the board for placement
-  }, [rotatePlacement, isMobile, setPaletteOpen, selectPart, selectType, setWireStartBoth]);
+  }, [rotatePlacement, isMobile, setPaletteOpen, selectPart, selectType, setWireStartBoth, cancelCarry]);
 
   const updateComponent = useCallback((id, patch) => {
     setPlacedComponents((prev) => prev.map((c) => (c.id === id ? { ...c, ...patch } : c)));
   }, []);
 
-  // What "Action" does depends on the part: buttons press, supplies switch on
-  // and off. Parts with nothing to actuate report null and hide the button.
-  const actionFor = (comp) => {
-    if (!comp) return null;
-    if (comp.type === 'Switch') {
-      return {
-        label: comp.pressed ? 'Release' : 'Press',
-        active: !!comp.pressed,
-        icon: <CircleDot size={16} />,
-        run: () => updateComponent(comp.id, { pressed: !comp.pressed }),
-      };
-    }
-    if (comp.type === 'PowerSupply') {
-      const on = comp.on !== false;
-      return {
-        label: on ? 'Turn Off' : 'Turn On',
-        active: on,
-        icon: <Power size={16} />,
-        run: () => updateComponent(comp.id, { on: !on }),
-      };
-    }
-    return null;
-  };
-  const selectedAction = actionFor(selectedComponent);
 
   const stopPlacing = useCallback(() => {
     selectType(null);
@@ -349,29 +446,81 @@ export default function App() {
     setWireStartBoth(null);
   }, [selectType, setWireStartBoth]);
 
-  // Clear the board and build a guided project in its place.
-  const loadProject = useCallback((project) => {
-    setPlacedComponents(project.parts.map((p, i) => ({
-      id: `proj-${project.id}-${i}-${Date.now()}`,
-      type: p.type,
-      position: [p.at[0] * PITCH, restY(p.type), p.at[1] * PITCH],
-      rotation: p.rotation || 0,
-      ...(p.to ? { end: [p.to[0] * PITCH, p.to[1] * PITCH] } : {}),
-      ...(p.value !== undefined ? { value: p.value } : {}),
-      ...(p.pressed !== undefined ? { pressed: p.pressed } : {}),
-    })));
+  // Start a guided project. 'guided' clears the board so you build it
+  // yourself with the coach checking each step; 'auto' places every part.
+  const loadProject = useCallback((project, mode = 'guided') => {
+    setPlacedComponents(mode === 'auto' ? projectComponents(project, restY, `p${Date.now()}`) : []);
+    setActiveProject(project);
     setBoardType('HALF');
     selectType(null);
     selectPart(null);
+    setCarry(null);
     setWireStartBoth(null);
+    setHighlight(null);
     setShowProjects(false);
+    setRightTab('coach');
+    setRightOpen(true);
+    if (isMobile) setPaletteOpen(false);
     closeHelp();
-  }, [selectPart, selectType, setWireStartBoth, closeHelp]);
+  }, [selectPart, selectType, setCarry, setWireStartBoth, closeHelp, setRightOpen, setPaletteOpen, isMobile]);
+
+  // --- Circuit Coach -------------------------------------------------------
+  const coach = useMemo(
+    () => (activeProject ? checkProject(activeProject, placedComponents, sim) : null),
+    [activeProject, placedComponents, sim],
+  );
+  const freeIssues = useMemo(
+    () => (activeProject ? [] : checkCircuit(placedComponents, sim)),
+    [activeProject, placedComponents, sim],
+  );
+  const coachIssues = coach ? coach.issues.filter((i) => i.severity !== 'todo') : freeIssues;
+  const problemCount = coachIssues.filter((i) => i.severity === 'error').length;
+  const hintFor = (id) => coachIssues.find((i) => i.partIds?.includes(id)) || null;
+
+  // "Show me": select the part involved and pulse the holes for a while.
+  const showIssue = useCallback((issue) => {
+    const cells = [...(issue.cells || [])];
+    for (const id of issue.partIds || []) {
+      const c = placedComponents.find((p) => p.id === id);
+      if (c && !issue.cells?.length) cells.push(...terminalCells(c));
+    }
+    setHighlight({ cells, at: Date.now() });
+    if (issue.partIds?.length) {
+      selectType(null);
+      selectPart(issue.partIds[0]);
+    }
+    if (isMobile) setRightOpen(false); // let them see the board
+  }, [placedComponents, selectPart, selectType, isMobile, setRightOpen]);
+  useEffect(() => {
+    if (!highlight) return undefined;
+    const t = setTimeout(() => setHighlight(null), 6000);
+    return () => clearTimeout(t);
+  }, [highlight]);
+
+  // The guide's version of the part the current step asks you to place.
+  const currentStep = coach && coach.current >= 0 ? activeProject.steps[coach.current] : null;
+  const ghost = useMemo(() => {
+    // only while the part is still missing — not once it's placed but wrong
+    if (!currentStep?.place || !activeProject || coach.steps[coach.current].status !== 'todo') return null;
+    const idx = activeProject.parts.findIndex((p) => p.ref === currentStep.place);
+    const comp = projectComponents(activeProject, restY)[idx];
+    const part = activeProject.parts[idx];
+    const value = part.type === 'Resistor' ? ` · ${part.value >= 1000 ? `${part.value / 1000} kΩ` : `${part.value} Ω`}`
+      : part.type === 'PowerSupply' ? ` · ${part.value} V`
+        : part.color ? ` · ${part.color}` : '';
+    return { comp, label: `${part.ref}${value}` };
+  }, [currentStep, activeProject, coach]);
+  // Holes a pending connection step wants joined.
+  const connectCells = coach && coach.current >= 0 && currentStep?.connect
+    ? coach.steps[coach.current].issue?.cells || []
+    : [];
 
   useEffect(() => {
     const onKey = (e) => {
       if (['INPUT', 'SELECT', 'TEXTAREA'].includes(e.target.tagName)) return;
-      if (e.key === 'Escape') {
+      if (e.key === 'Escape' && carryRef.current) {
+        cancelCarry();
+      } else if (e.key === 'Escape') {
         selectType(null);
         selectPart(null);
         setHoverCell(null);
@@ -382,11 +531,21 @@ export default function App() {
       } else if (e.key === 'r' || e.key === 'R') {
         if (selectedId !== null) rotateSelected();
         else rotatePlacement((r) => r + Math.PI / 2);
+      } else if (e.key.startsWith('Arrow') && selectedComponent) {
+        // nudge the selected part one hole along the board
+        e.preventDefault();
+        const [dx, dz] = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[e.key];
+        const [x, z] = snapToGrid({
+          x: selectedComponent.position[0] + dx * PITCH,
+          z: selectedComponent.position[2] + dz * PITCH,
+        }, board);
+        moveTo(selectedComponent.id, x, z);
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [selectedId, removeSelected, rotateSelected, rotatePlacement, selectPart, selectType, setWireStartBoth]);
+  }, [selectedId, selectedComponent, board, moveTo, removeSelected, rotateSelected, rotatePlacement,
+    selectPart, selectType, setWireStartBoth, cancelCarry]);
 
   const renderComponent = (comp) => {
     const Visual = COMPONENT_VISUALS[comp.type];
@@ -396,25 +555,11 @@ export default function App() {
         key={comp.id}
         position={comp.position}
         rotation={[0, comp.rotation || 0, 0]}
-        onPointerDown={(e) => {
-          e.stopPropagation();
-          // Touching a part only ever selects it. Dragging is possible solely
-          // while Move is armed for that part, so browsing a circuit can never
-          // rearrange it by accident.
-          if (selectedIdRef.current !== comp.id) {
-            selectPart(comp.id);
-            return;
-          }
-          if (moveModeRef.current) beginDrag(comp, e);
-        }}
-        onClick={(e) => e.stopPropagation()}
-        onDoubleClick={(e) => {
-          e.stopPropagation();
-          if (comp.type === 'Switch') updateComponent(comp.id, { pressed: !comp.pressed });
-        }}
+        onPointerDown={(e) => pressPart(comp, e)}
+        onClick={(e) => { if (!selectedTypeRef.current) e.stopPropagation(); }}
         onPointerOver={(e) => {
           e.stopPropagation();
-          if (dragId === null) document.body.style.cursor = 'grab';
+          if (dragId === null) document.body.style.cursor = 'pointer';
         }}
         onPointerOut={() => {
           if (dragId === null) document.body.style.cursor = 'auto';
@@ -422,7 +567,10 @@ export default function App() {
       >
         <Visual
           selected={selectedId === comp.id}
-          {...(comp.type === 'LED' ? { color: 'red', current: sim.readings[comp.id]?.i ?? 0 } : {})}
+          {...(comp.type === 'LED' ? {
+            color: (LED_COLORS[comp.color] || LED_COLORS.red).hex,
+            current: sim.readings[comp.id]?.i ?? 0,
+          } : {})}
           {...(comp.type === 'Switch' ? { pressed: !!comp.pressed } : {})}
           {...(comp.type === 'PowerSupply' ? { on: comp.on !== false } : {})}
           {...(comp.type === 'Wire' ? { path: wireRenderPath(comp, placedComponents) } : {})}
@@ -435,17 +583,34 @@ export default function App() {
   // connection landed without re-entering the wire tool.
   const showJunctions = selectedComponent?.type === 'Wire';
 
-  const hint = selectedType === 'Wire'
-    ? (wireStart
-      ? 'Now tap the second terminal — the wire routes itself around anything between'
-      : 'Tap a red (+) or blue (−) terminal to start the wire')
-    : selectedType
-      ? `Placing ${selectedType} — tap the board to drop it`
-      : moveMode
-        ? 'Move mode: drag the part, or tap a hole to send it there'
+  const hint = carryId
+    ? 'Moving — tap a hole to drop it · Esc puts it back'
+    : selectedType === 'Wire'
+      ? (wireStart
+        ? 'Now tap the second terminal — the wire routes itself around anything between'
+        : 'Tap a red (+) or blue (−) terminal to start the wire')
+      : selectedType
+        ? `Placing ${selectedType} — tap the board to drop it`
         : selectedId !== null
-          ? 'Use Move, Rotate or Action below · Delete removes'
-          : 'Pick a component, then tap the board · tap a placed part to select it';
+          ? 'Everything for this part is in its menu · arrow keys nudge · R rotates · Del deletes'
+          : 'Click any part to open its menu · drag a part to move it';
+
+  const carried = carryId ? placedComponents.find((c) => c.id === carryId) : null;
+  const menuComp = !carryId && !selectedType ? selectedComponent : null;
+  const menu = menuComp && (
+    <PartMenu
+      comp={menuComp}
+      reading={sim.readings[menuComp.id]}
+      fault={(sim.faults || {})[menuComp.id]}
+      hint={hintFor(menuComp.id)}
+      onUpdate={updateComponent}
+      onRotate={rotateSelected}
+      onDelete={removeSelected}
+      onMove={startCarry}
+      onClose={() => selectPart(null)}
+      sheet={isMobile}
+    />
+  );
 
   return (
     <div style={{ width: '100%', height: '100%', position: 'relative', background: '#0a0a0a' }}>
@@ -485,7 +650,7 @@ export default function App() {
             <mesh key={`t${i}`} position={[t.world[0], BOARD_TOP_Y + 0.012, t.world[1]]}>
               <sphereGeometry args={[hot ? 0.019 : 0.012, 12, 12]} />
               <meshBasicMaterial
-                color={t.polarity === '+' ? '#ff5555' : '#5599ff'}
+                color={{ '+': '#ff5555', C: '#ff9944', B: '#ffee55' }[t.polarity] || '#5599ff'}
                 transparent
                 opacity={hot ? 1 : 0.75}
                 depthWrite={false}
@@ -543,9 +708,24 @@ export default function App() {
         {selectedComponent && terminalWorldPositions(selectedComponent, BOARD_TOP_Y + 0.005).map((p, i) => (
           <mesh key={i} position={p}>
             <sphereGeometry args={[0.012, 12, 12]} />
-            <meshBasicMaterial color={i === 0 ? '#ff5555' : '#5599ff'} depthWrite={false} transparent opacity={0.9} />
+            <meshBasicMaterial color={terminalColor(selectedComponent.type, i)} depthWrite={false} transparent opacity={0.9} />
           </mesh>
         ))}
+
+        {/* The part's menu floats beside it (phones get a bottom sheet instead) */}
+        {menu && !isMobile && (
+          <Html
+            position={[menuComp.position[0], menuComp.position[1] + 0.04, menuComp.position[2]]}
+            zIndexRange={[19, 10]}
+          >
+            <div style={{ transform: 'translate(28px, -50%)' }}>{menu}</div>
+          </Html>
+        )}
+
+        {/* Guided build: where the next part goes, and holes still to join */}
+        {showGhost && ghost && <GhostPart comp={ghost.comp} label={ghost.label} />}
+        {connectCells.map((cell, k) => <PulseRing key={`c${k}`} cell={cell} color="#22ff88" />)}
+        {highlight && highlight.cells.map((cell, k) => <PulseRing key={`h${highlight.at}-${k}`} cell={cell} />)}
 
         <CanvasBridge ctxRef={canvasCtxRef} />
 
@@ -636,29 +816,30 @@ export default function App() {
             </div>
 
             <button
-              onClick={() => {
-                setShowTextbook((v) => {
-                  const next = !v;
-                  if (next) setRightOpen(true);
-                  return next;
-                });
-              }}
+              onClick={() => toggleRight('coach')}
+              title="Circuit Coach — checks your wiring"
               style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '8px',
-                padding: isMobile ? '8px' : '7px 14px',
-                cursor: 'pointer',
-                backgroundColor: showTextbook ? '#3b82f6' : '#1a1a1a',
-                border: '1px solid #333',
-                borderRadius: '6px',
-                color: 'white',
-                fontSize: '0.85rem',
-                fontWeight: 500,
+                ...headerBtn(rightOpen && rightTab === 'coach', isMobile),
+                position: 'relative',
               }}
             >
+              <Stethoscope size={16} />
+              {!isMobile && 'Coach'}
+              {problemCount > 0 && (
+                <span style={{
+                  position: 'absolute', top: -6, right: -6, minWidth: 17, height: 17, padding: '0 4px',
+                  borderRadius: 9, background: '#ef4444', color: 'white', fontSize: '0.65rem', fontWeight: 700,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                }}>{problemCount}</span>
+              )}
+            </button>
+            <button
+              onClick={() => toggleRight('book')}
+              title="Lab textbook and build guides"
+              style={headerBtn(rightOpen && rightTab === 'book', isMobile)}
+            >
               <Book size={16} />
-              {!isMobile && (showTextbook ? 'Hide Textbook' : 'Lab Textbook')}
+              {!isMobile && 'Textbook'}
             </button>
           </div>
         </div>
@@ -678,13 +859,11 @@ export default function App() {
             <ComponentPalette
               onSelect={handlePaletteSelect}
               selectedType={selectedType}
-              onRemove={removeSelected}
-              hasSelection={selectedId !== null}
               onClose={() => setPaletteOpen(false)}
             />
           </div>
 
-          {/* Right drawer — textbook or inspector/instruments */}
+          {/* Right drawer — Circuit Coach or textbook */}
           <div style={{
             position: 'absolute',
             top: 0, right: 0, bottom: 0,
@@ -694,28 +873,56 @@ export default function App() {
             transition: 'transform 0.25s ease',
             pointerEvents: rightOpen ? 'auto' : 'none',
           }}>
-            {showTextbook ? (
-              <div style={{ width: 'min(480px, 92vw)', height: '100%', background: 'rgba(15,15,15,0.97)', borderLeft: '1px solid #222', position: 'relative' }}>
+            <div style={{
+              width: rightTab === 'book' ? 'min(480px, 92vw)' : 'min(340px, 92vw)',
+              height: '100%', background: 'rgba(15,15,15,0.97)', borderLeft: '1px solid #262626',
+              display: 'flex', flexDirection: 'column', color: 'white',
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 8px 0 10px', borderBottom: '1px solid #222' }}>
+                {[['coach', 'Coach', <Stethoscope key="i" size={14} />], ['book', 'Textbook', <Book key="i" size={14} />]].map(([id, label, icon]) => (
+                  <button
+                    key={id}
+                    onClick={() => setRightTab(id)}
+                    style={{
+                      display: 'flex', alignItems: 'center', gap: 6, padding: '8px 12px', cursor: 'pointer',
+                      background: 'none', border: 'none', fontSize: '0.8rem', fontWeight: 600,
+                      color: rightTab === id ? 'white' : '#777',
+                      borderBottom: `2px solid ${rightTab === id ? '#3b82f6' : 'transparent'}`,
+                    }}
+                  >
+                    {icon} {label}
+                    {id === 'coach' && problemCount > 0 && (
+                      <span style={{ fontSize: '0.65rem', background: '#ef4444', color: 'white', borderRadius: 8, padding: '1px 6px' }}>{problemCount}</span>
+                    )}
+                  </button>
+                ))}
                 <button
                   onClick={() => setRightOpen(false)}
-                  style={{ ...chipStyle, position: 'absolute', top: 8, right: 8, zIndex: 2, padding: 8 }}
-                  aria-label="Close textbook"
+                  aria-label="Close panel"
+                  style={{ marginLeft: 'auto', background: 'transparent', border: 'none', color: '#888', cursor: 'pointer', padding: 6, display: 'flex' }}
                 >
-                  <X size={16} />
+                  <X size={18} />
                 </button>
-                <Textbook />
               </div>
-            ) : (
-              <InstrumentPanel
-                selected={selectedComponent}
-                reading={selectedComponent ? sim.readings[selectedComponent.id] : null}
-                fault={selectedComponent ? (sim.faults || {})[selectedComponent.id] : null}
-                onUpdate={updateComponent}
-                onRotate={rotateSelected}
-                onDelete={removeSelected}
-                onClose={() => setRightOpen(false)}
-              />
-            )}
+              <div style={{ flex: 1, overflowY: 'auto', padding: rightTab === 'coach' ? 14 : 0 }}>
+                {rightTab === 'coach' ? (
+                  <CoachPanel
+                    project={activeProject}
+                    result={coach}
+                    freeIssues={freeIssues}
+                    onShow={showIssue}
+                    onExit={() => { setActiveProject(null); setHighlight(null); }}
+                    onRestart={() => loadProject(activeProject, 'guided')}
+                    onBuildForMe={() => loadProject(activeProject, 'auto')}
+                    onOpenProjects={() => setShowProjects(true)}
+                    showGhost={showGhost}
+                    onToggleGhost={() => setShowGhost((v) => !v)}
+                  />
+                ) : (
+                  <Textbook onStartProject={loadProject} />
+                )}
+              </div>
+            </div>
           </div>
 
           {/* Floating openers when drawers are closed */}
@@ -725,74 +932,90 @@ export default function App() {
             </button>
           )}
           {!rightOpen && (
-            <button onClick={() => setRightOpen(true)} style={{ ...chipStyle, position: 'absolute', top: 10, right: 10, zIndex: 10 }}>
-              <Wrench size={16} /> {showTextbook ? 'Textbook' : 'Tools'}
-              {selectedComponent && <span style={{ width: 7, height: 7, borderRadius: '50%', background: '#3b82f6' }} />}
+            <button onClick={() => toggleRight('coach')} style={{ ...chipStyle, position: 'absolute', top: 10, right: 10, zIndex: 10 }}>
+              <Stethoscope size={16} /> Coach
+              {problemCount > 0 && (
+                <span style={{ fontSize: '0.65rem', background: '#ef4444', color: 'white', borderRadius: 8, padding: '1px 6px' }}>{problemCount}</span>
+              )}
             </button>
           )}
 
-          {/* Floating action chips (touch-friendly; no keyboard needed) */}
+          {/* Bottom centre: guided step, move / placement status */}
           <div style={{
             position: 'absolute',
             bottom: 12,
             left: '50%',
             transform: 'translateX(-50%)',
             display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
             gap: 8,
             zIndex: 15,
+            width: 'max-content',
+            maxWidth: 'calc(100% - 24px)',
           }}>
-            {selectedType && (
-              <>
-                <span style={{ ...chipStyle, cursor: 'default', color: '#3b82f6', border: '1px solid #2a4a7a' }}>
-                  {selectedType === 'Wire'
-                    ? (wireStart ? 'Tap 2nd terminal' : 'Tap 1st terminal')
-                    : `Placing ${selectedType}`}
+            {coach && !(isMobile && menu) && (
+              <button
+                onClick={() => toggleRight('coach', true)}
+                style={{
+                  ...chipStyle, borderRadius: 12, maxWidth: '100%', textAlign: 'left',
+                  border: `1px solid ${coach.done ? '#1f5a35' : '#2a4a7a'}`,
+                  color: coach.done ? '#8ef0ab' : '#dbe7ff',
+                }}
+              >
+                {coach.done ? <CircleCheck size={16} style={{ flexShrink: 0 }} /> : <ArrowRight size={16} style={{ flexShrink: 0, color: '#6aa2ff' }} />}
+                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {coach.done
+                    ? `${activeProject.name} complete!`
+                    : `Step ${coach.current + 1}/${activeProject.steps.length}: ${currentStep?.text ?? ''}`}
                 </span>
-                {selectedType !== 'Wire' && (
-                  <button onClick={() => rotatePlacement((r) => r + Math.PI / 2)} style={chipStyle} aria-label="Rotate placement">
-                    <RotateCw size={16} />
-                  </button>
+                {problemCount > 0 && !coach.done && (
+                  <span style={{ flexShrink: 0, fontSize: '0.65rem', background: '#ef4444', color: 'white', borderRadius: 8, padding: '1px 6px' }}>
+                    {problemCount} problem{problemCount > 1 ? 's' : ''}
+                  </span>
                 )}
-                <button onClick={stopPlacing} style={chipStyle} aria-label="Stop placing">
-                  <X size={16} />
-                </button>
-              </>
+              </button>
             )}
-            {!selectedType && selectedComponent && (
-              <>
-                <button
-                  onClick={() => setMove(!moveMode)}
-                  style={{
-                    ...chipStyle,
-                    ...(moveMode
-                      ? { background: '#1d4ed8', border: '1px solid #3b82f6', color: 'white' }
-                      : {}),
-                  }}
-                >
-                  <Move size={16} /> {moveMode ? 'Moving…' : 'Move'}
-                </button>
-                <button onClick={rotateSelected} style={chipStyle}>
-                  <RotateCw size={16} /> Rotate
-                </button>
-                {selectedAction && (
-                  <button
-                    onClick={selectedAction.run}
-                    style={{
-                      ...chipStyle,
-                      ...(selectedAction.active
-                        ? { background: '#14532d', border: '1px solid #22c55e', color: '#8ef0ab' }
-                        : {}),
-                    }}
-                  >
-                    {selectedAction.icon} {selectedAction.label}
+            <div style={{ display: 'flex', gap: 8 }}>
+              {carried && (
+                <>
+                  <span style={{ ...chipStyle, cursor: 'default', color: '#6aa2ff', border: '1px solid #2a4a7a' }}>
+                    Moving {carried.ref || carried.type} — tap a hole to drop it
+                  </span>
+                  <button onClick={cancelCarry} style={chipStyle} aria-label="Cancel move">
+                    <X size={16} />
                   </button>
-                )}
-                <button onClick={removeSelected} style={{ ...chipStyle, color: '#ff7777' }}>
-                  <Trash2 size={16} /> Delete
-                </button>
-              </>
-            )}
+                </>
+              )}
+              {selectedType && (
+                <>
+                  <span style={{ ...chipStyle, cursor: 'default', color: '#3b82f6', border: '1px solid #2a4a7a' }}>
+                    {selectedType === 'Wire'
+                      ? (wireStart ? 'Tap 2nd terminal' : 'Tap 1st terminal')
+                      : `Placing ${selectedType}`}
+                  </span>
+                  {selectedType !== 'Wire' && (
+                    <button onClick={() => rotatePlacement((r) => r + Math.PI / 2)} style={chipStyle} aria-label="Rotate placement">
+                      <RotateCw size={16} />
+                    </button>
+                  )}
+                  <button onClick={stopPlacing} style={chipStyle} aria-label="Stop placing">
+                    <X size={16} />
+                  </button>
+                </>
+              )}
+            </div>
           </div>
+
+          {/* Phones: the part menu is a bottom sheet */}
+          {menu && isMobile && (
+            <div style={{
+              position: 'absolute', left: 0, right: 0, bottom: 0, zIndex: 25,
+              maxHeight: '62%', overflowY: 'auto', pointerEvents: 'auto',
+            }}>
+              {menu}
+            </div>
+          )}
         </div>
 
         {/* Bottom Status Bar */}
@@ -813,6 +1036,14 @@ export default function App() {
             {!isMobile && <span style={{ color: '#888', whiteSpace: 'nowrap' }}>{hint}</span>}
           </div>
           <div style={{ display: 'flex', gap: '12px', alignItems: 'center', whiteSpace: 'nowrap' }}>
+            {problemCount > 0 && (
+              <button
+                onClick={() => toggleRight('coach', true)}
+                style={{ display: 'flex', alignItems: 'center', gap: 4, color: '#ffaa55', background: 'none', border: 'none', cursor: 'pointer', fontSize: 'inherit', padding: 0 }}
+              >
+                <Stethoscope size={12} /> {problemCount} to fix
+              </button>
+            )}
             {faultIds.length > 0 && (
               <span style={{ display: 'flex', alignItems: 'center', gap: 4, color: '#ff5544' }}>
                 <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#ff5544' }} />
@@ -824,7 +1055,7 @@ export default function App() {
               {sim.status === 'ok'
                 ? `Simulating · ${sim.nodes + 1} nodes`
                 : sim.status === 'powered-off'
-                  ? (isMobile ? 'Supply off' : 'Supply output is off — select it and press Turn On')
+                  ? (isMobile ? 'Supply off' : 'Supply output is off — click it and switch it on')
                   : (isMobile ? 'No power' : 'Add a DC power supply to simulate')}
             </span>
             {!isMobile && (
