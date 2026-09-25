@@ -1,4 +1,110 @@
-const Textbook = () => {
+import { Footprints, Hammer } from 'lucide-react';
+import { PROJECTS } from '../lib/projects';
+import { PART_NAMES } from '../lib/coach';
+import { LED_COLORS } from '../lib/simulate';
+import { Schematic, LayoutDiagram } from './Diagrams';
+
+const pre = { backgroundColor: '#eee', padding: '10px' };
+
+// What each build checks out at, so readers can compare with the meter.
+const EXPECTED = {
+  'first-light': 'LED1 ≈ 9 mA at ≈ 2.0 V; R1 drops ≈ 3.0 V.',
+  'push-button-light': 'Released: 0 mA and 5 V across S1. Pressed: LED1 ≈ 9 mA and ≈ 0 V across S1.',
+  'parallel-leds': 'LED1 ≈ 9.1 mA, LED2 ≈ 8.5 mA, supply ≈ 17.7 mA (the sum).',
+  'voltage-divider': '4.5 V across each resistor, 4.5 mA through both.',
+  'polarity-protection': 'D1 drops ≈ 0.7 V; LED1 ≈ 7 mA. Turn D1 around and everything reads 0 mA.',
+  'and-gate': 'LED1 ≈ 9 mA only with both S1 and S2 pressed; 0 mA otherwise.',
+  'or-gate': 'LED1 ≈ 8.8 mA with either button pressed.',
+  'transistor-switch': 'S1 pressed: I_B ≈ 4.2 mA, I_C ≈ 7.9 mA, V_CE ≈ 0.2 V (saturated). Released: everything 0.',
+};
+
+const scrollTo = (id) => (e) => {
+  e.preventDefault();
+  document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+};
+
+// "1 × 330 Ω resistor" style parts list from a project's layout.
+function billOfMaterials(project) {
+  const rows = new Map();
+  for (const p of project.parts) {
+    let name = PART_NAMES[p.type] || p.type;
+    if (p.type === 'Resistor') name = `${p.value >= 1000 ? `${p.value / 1000} kΩ` : `${p.value} Ω`} resistor`;
+    else if (p.type === 'LED') name = `${(LED_COLORS[p.color] || LED_COLORS.red).label.toLowerCase()} LED`;
+    else if (p.type === 'PowerSupply') name = `DC power supply, set to ${p.value} V`;
+    else if (p.type === 'Diode') name = '1N4001 diode';
+    else if (p.type === 'Transistor') name = 'NPN transistor';
+    else if (p.type === 'Wire') name = 'jumper wire';
+    const refs = rows.get(name) || { count: 0, refs: [] };
+    refs.count++;
+    if (p.ref) refs.refs.push(p.ref);
+    rows.set(name, refs);
+  }
+  return [...rows.entries()];
+}
+
+const btn = (primary) => ({
+  display: 'inline-flex', alignItems: 'center', gap: 6, padding: '7px 12px', borderRadius: 6,
+  cursor: 'pointer', fontSize: '0.8rem', fontWeight: 600, fontFamily: 'system-ui, sans-serif',
+  border: primary ? 'none' : '1px solid #bbb', background: primary ? '#3b82f6' : 'white',
+  color: primary ? 'white' : '#333',
+});
+
+function BuildGuide({ project, number, onStartProject }) {
+  return (
+    <section id={`guide-${project.id}`} style={{ marginTop: 28 }}>
+      <h3 style={{ marginBottom: 4 }}>W.{number} {project.name}</h3>
+      <p style={{ margin: 0, fontStyle: 'italic', color: '#666' }}>{project.difficulty} · {project.steps.length} steps · {project.tagline}</p>
+      <p><strong>You&apos;ll learn:</strong> {project.learn}</p>
+
+      <p style={{ marginBottom: 4 }}><strong>Parts list</strong></p>
+      <ul style={{ marginTop: 0 }}>
+        {billOfMaterials(project).map(([name, r]) => (
+          <li key={name}>{r.count} × {name}{r.refs.length ? ` (${r.refs.join(', ')})` : ''}</li>
+        ))}
+      </ul>
+
+      <p style={{ marginBottom: 4 }}><strong>Schematic</strong></p>
+      <div style={{ background: '#161616', borderRadius: 6, padding: 8, maxWidth: 360 }}>
+        <Schematic id={project.id} />
+      </div>
+
+      <p style={{ marginBottom: 4 }}><strong>Breadboard layout</strong> (top view; blue numbers = the step that places each part)</p>
+      <div style={{ maxWidth: 420 }}>
+        <LayoutDiagram project={project} />
+      </div>
+
+      <p style={{ marginBottom: 4 }}><strong>Build it</strong></p>
+      <ol style={{ marginTop: 0 }}>
+        {project.steps.map((s, k) => <li key={k}>{s.text}</li>)}
+      </ol>
+
+      {EXPECTED[project.id] && (
+        <p><strong>Check your readings:</strong> {EXPECTED[project.id]}</p>
+      )}
+      {project.explore?.length > 0 && (
+        <>
+          <p style={{ marginBottom: 4 }}><strong>Try next</strong></p>
+          <ul style={{ marginTop: 0 }}>
+            {project.explore.map((t, k) => <li key={k}>{t}</li>)}
+          </ul>
+        </>
+      )}
+      {onStartProject && (
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          <button style={btn(true)} onClick={() => onStartProject(project, 'guided')}>
+            <Footprints size={14} /> Guide me on the board
+          </button>
+          <button style={btn(false)} onClick={() => onStartProject(project, 'auto')}>
+            <Hammer size={14} /> Build it for me
+          </button>
+        </div>
+      )}
+    </section>
+  );
+}
+
+const Textbook = ({ onStartProject }) => {
+  const guides = PROJECTS.filter((p) => p.buildable);
   return (
     <div style={{
       width: '100%',
@@ -39,6 +145,7 @@ const Textbook = () => {
           <ul>
             <li>2.1 Instruments: Multimeter, Oscilloscope, Power Supply</li>
             <li>2.2 Reading Schematics and Breadboard Layouts</li>
+            <li>2.3 Reading the Layout Diagrams in This Book</li>
           </ul>
         </li>
         <li><strong>Chapter 3 – Basic Components</strong>
@@ -54,6 +161,19 @@ const Textbook = () => {
             <li>4.1 Lighting an LED (Series Resistor Calculation)</li>
             <li>4.2 Series and Parallel Resistor Networks</li>
             <li>4.3 Voltage Dividers</li>
+            <li>4.4 Parallel Circuits – Branches</li>
+            <li>4.5 Switches as Logic – AND and OR</li>
+          </ul>
+        </li>
+        <li style={{ listStyle: 'none', margin: '6px 0 6px -18px' }}>
+          <strong><a href="#workshop" onClick={scrollTo('workshop')} style={{ color: '#1d4ed8' }}>Workshop – Lab Build Guides</a></strong>
+          <ul>
+            <li><a href="#troubleshooting" onClick={scrollTo('troubleshooting')} style={{ color: '#1d4ed8' }}>W.0 Troubleshooting with the Circuit Coach</a></li>
+            {guides.map((p, k) => (
+              <li key={p.id}>
+                <a href={`#guide-${p.id}`} onClick={scrollTo(`guide-${p.id}`)} style={{ color: '#1d4ed8' }}>W.{k + 1} {p.name}</a>
+              </li>
+            ))}
           </ul>
         </li>
         <li><strong>Chapter 5 – Semiconductor Devices</strong>
@@ -126,24 +246,24 @@ const Textbook = () => {
       <p>
         <strong>Ohm’s Law:</strong>
       </p>
-      <pre style={{ backgroundColor: '#eee', padding: '10px' }}>V = I × R</pre>
+      <pre style={pre}>V = I × R</pre>
       <p>
         If you know any two, you can calculate the third.
       </p>
       <p>
         Example: A 5 V battery connected to a 1 kΩ resistor:
       </p>
-      <pre style={{ backgroundColor: '#eee', padding: '10px' }}>I = V / R = 5 V / 1000 Ω = 0.005 A = 5 mA</pre>
+      <pre style={pre}>I = V / R = 5 V / 1000 Ω = 0.005 A = 5 mA</pre>
 
       <h3>1.3 Power and Energy</h3>
       <p>
         <strong>Power (P)</strong> is the rate of energy conversion. In electrical terms:
       </p>
-      <pre style={{ backgroundColor: '#eee', padding: '10px' }}>P = V × I   (watts)</pre>
+      <pre style={pre}>P = V × I   (watts)</pre>
       <p>
         Using Ohm’s law, also:
       </p>
-      <pre style={{ backgroundColor: '#eee', padding: '10px' }}>P = I² × R = V² / R</pre>
+      <pre style={pre}>P = I² × R = V² / R</pre>
       <p>
         Resistors dissipate power as heat. Always choose a resistor with a power rating higher than the calculated value (typical: 1/4 W).
       </p>
@@ -173,8 +293,25 @@ const Textbook = () => {
         <li>Ground: three horizontal lines decreasing in length</li>
       </ul>
       <p>
-        On a <strong>breadboard</strong>, vertical power rails run along the sides (red for +, blue for -). The inner rows are connected in groups of five holes horizontally. Components are plugged into these holes, and jumper wires complete the connections.
+        On a real <strong>breadboard</strong>, vertical power rails run along the sides (red for +, blue for −) and the inner holes are joined in strips of five by metal clips underneath.
       </p>
+      <p>
+        <strong>In this virtual lab, connections are stricter:</strong> two legs are connected only when they sit in the <em>exact same hole</em>, or when a jumper wire has one end in each of their holes. A wire only connects at its two ends, never where it passes over a hole. The green rings that appear while wiring mark holes where leads really meet.
+      </p>
+
+      <h3>2.3 Reading the Layout Diagrams in This Book</h3>
+      <p>Every build in the Workshop chapter has a top-down breadboard layout drawn from the same data the lab uses, so it matches “Build it for me” exactly.</p>
+      <ul>
+        <li><strong>Grey box with red and black circles</strong>: the DC power supply. Red is the + post and black is the − post.</li>
+        <li><strong>Tan bar</strong>: a resistor. Either leg can go either way.</li>
+        <li><strong>Coloured circle with red and blue dots</strong>: an LED. The red dot is the + leg (anode) and the blue dot is the − leg (cathode).</li>
+        <li><strong>Black bar with a silver stripe</strong>: a diode. The stripe marks the cathode (K).</li>
+        <li><strong>Grey square</strong>: a push button.</li>
+        <li><strong>Black half-circle with C, B and E</strong>: an NPN transistor, showing collector, base and emitter.</li>
+        <li><strong>Green line</strong>: a jumper wire. The dark dots are its two ends, the only places it connects.</li>
+        <li><strong>Blue numbered badge</strong>: the build step that places that part.</li>
+      </ul>
+      <p>You don&apos;t have to copy the positions exactly. The Circuit Coach checks <em>which legs are connected</em>, not where the parts sit.</p>
 
       <hr />
 
@@ -202,13 +339,16 @@ const Textbook = () => {
 
       <h3>3.4 Diodes and LEDs – One‑Way Streets</h3>
       <p>Diodes allow current in one direction (anode to cathode). LEDs emit light when current flows. Always use a current‑limiting resistor in series.</p>
+      <p>
+        A conducting silicon diode drops about <strong>0.7 V</strong>, and an LED drops more, depending on its colour: roughly red 1.9 V, yellow 2.0 V, green 2.1 V and blue 3.0 V. Placed in series with the supply, a diode is a cheap <strong>reverse‑polarity guard</strong>. If the battery goes in backwards, the diode blocks the current and nothing downstream is damaged. Build it in Workshop W.5.
+      </p>
 
       <hr />
 
       <h2>Chapter 4 – First Circuits</h2>
       <h3>4.1 Lighting an LED</h3>
       <p><strong>Schematic:</strong></p>
-      <pre style={{ backgroundColor: '#eee', padding: '10px' }}>{`   +5V
+      <pre style={pre}>{`   +5V
     |
    [R]
     |
@@ -236,7 +376,7 @@ const Textbook = () => {
       <p>Build a parallel resistor network and measure total resistance with the DMM (ohmmeter setting, power off!).</p>
 
       <h3>4.3 Voltage Dividers</h3>
-      <pre style={{ backgroundColor: '#eee', padding: '10px' }}>{`        V_in
+      <pre style={pre}>{`        V_in
          |
         [R1]
          |
@@ -247,6 +387,68 @@ const Textbook = () => {
         GND`}</pre>
       <p>V_out = V_in * (R2 / (R1 + R2))</p>
       <p>Use two 10 kΩ resistors and 5 V input; V_out = 2.5 V.</p>
+
+      <h3>4.4 Parallel Circuits – Branches</h3>
+      <p>
+        When parts sit on separate paths between the same two points, they are in <strong>parallel</strong>. Every branch gets the full supply voltage and works independently. The supply provides the <em>sum</em> of the branch currents:
+      </p>
+      <pre style={pre}>I_total = I_1 + I_2 + …</pre>
+      <p>This is how house wiring works. Switching off one lamp doesn&apos;t affect the others. Give every LED branch its own resistor, because LEDs sharing one resistor fight over the current. Build it in Workshop W.3.</p>
+
+      <h3>4.5 Switches as Logic – AND and OR</h3>
+      <p>Two switches can be combined in two basic ways:</p>
+      <ul>
+        <li><strong>Series = AND.</strong> There is one path and both switches sit on it, so both must be closed for current to flow.</li>
+        <li><strong>Parallel = OR.</strong> Each switch is its own path around the gap, so either one is enough.</li>
+      </ul>
+      <pre style={pre}>{`A B | AND | OR
+0 0 |  0  |  0
+0 1 |  0  |  1
+1 0 |  0  |  1
+1 1 |  1  |  1`}</pre>
+      <p>Replace each button with a transistor and you have the logic gates inside every computer. Build them in Workshop W.6 and W.7.</p>
+
+      <hr />
+
+      <h2 id="workshop">Workshop – Lab Build Guides</h2>
+      <p>
+        These guides take you from a single LED to a transistor switch. Every build runs in the live simulator. Open <strong>Projects</strong> and choose <strong>Guide me</strong>, or use the buttons under each guide. The board is cleared and the <strong>Circuit Coach</strong> follows along. It ticks off each step as you finish it, shows a ghost of where the next part goes, and pulses the holes you still need to join.
+      </p>
+
+      <h3 id="troubleshooting">W.0 Troubleshooting with the Circuit Coach</h3>
+      <p>
+        When something doesn&apos;t work, open the <strong>Coach</strong> tab. It lists problems <em>in build order</em>, because the first thing that&apos;s wrong is usually what breaks everything after it. Each problem says what&apos;s wrong, why it matters, and how to fix it. Press <strong>Show me</strong> to have it select the part and pulse the holes involved.
+      </p>
+      <table style={{ borderCollapse: 'collapse', width: '100%', fontSize: '0.9em' }}>
+        <thead>
+          <tr>
+            {['Symptom', 'Usual cause', 'Fix'].map((h) => (
+              <th key={h} style={{ textAlign: 'left', borderBottom: '2px solid #bbb', padding: '4px 6px' }}>{h}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {[
+            ['Nothing lights, no smoke', 'A leg or wire end is in a hole on its own, so the loop is open', 'Every connection must share a hole or have a jumper. Look for legs without a green ring.'],
+            ['LED stays dark but the circuit looks right', 'The LED is in backwards', 'Click it and rotate 180°. The red dot (anode) must face +.'],
+            ['LED flashes and smokes', 'No series resistor, or the resistor is too small', 'Add a 220 Ω – 1 kΩ resistor in series with it.'],
+            ['Supply smokes, “short circuit”', 'A wire joins + to − with nothing in between', 'Find the path from + to − that skips every part, and break it.'],
+            ['One part does nothing', 'Its two legs are joined by a wire (shorted out)', 'Remove the wire that runs from one of its legs to the other.'],
+            ['Works only when a button is held', 'That\'s normal for a momentary push button', 'Press it from the part menu. It stays pressed until you tap again.'],
+            ['Transistor never switches', 'Legs in the wrong order, or no base current', 'Check C-B-E order and that the base resistor reaches the middle leg.'],
+          ].map((row) => (
+            <tr key={row[0]}>
+              {row.map((cell, k) => (
+                <td key={k} style={{ borderBottom: '1px solid #ddd', padding: '4px 6px', verticalAlign: 'top' }}>{cell}</td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+
+      {guides.map((p, k) => (
+        <BuildGuide key={p.id} project={p} number={k + 1} onStartProject={onStartProject} />
+      ))}
 
       <hr />
 
@@ -260,6 +462,10 @@ const Textbook = () => {
         <li>Emitter to GND</li>
       </ul>
       <p>Pressing the button lights the LED. The transistor saturates (V_CE ≈ 0.2 V).</p>
+      <p>
+        <strong>Worked numbers (5 V supply).</strong> Base current I_B = (5 − 0.7) / 1 kΩ ≈ 4.3 mA. With a current gain β ≈ 100, the transistor <em>could</em> pass 430 mA, but the LED and its 330 Ω resistor only allow about (5 − 2.1 − 0.2) / 330 ≈ 8 mA. So the transistor is fully on, or <strong>saturated</strong>, and acts like a closed switch. Raise the base resistor to 100 kΩ and I_B falls to 43 µA. Now I_C = β × I_B ≈ 4 mA, so the transistor is <strong>amplifying</strong>. Never drive the base without a resistor: the base–emitter junction is a diode and will draw far too much current.
+      </p>
+      <p>Build it in Workshop W.8. The multimeter shows I_B, I_C and whether the transistor is off, amplifying or saturated.</p>
 
       <h3>5.2 Common‑Emitter Amplifier</h3>
       <p>Biased with a voltage divider, it amplifies small AC signals (e.g., from a microphone). Use a coupling capacitor on input/output.</p>
@@ -277,7 +483,7 @@ const Textbook = () => {
       </ul>
 
       <h3>6.2 Inverting Amplifier</h3>
-      <pre style={{ backgroundColor: '#eee', padding: '10px' }}>{`        R2
+      <pre style={pre}>{`        R2
    +---/\\/\\/\\---+
    |            |
   Vin o---R1----+---(-) OpAmp --> Vout
@@ -296,7 +502,7 @@ const Textbook = () => {
 
       <h2>Chapter 7 – Time‑Dependent Circuits</h2>
       <h3>7.1 RC Charging/Discharging</h3>
-      <pre style={{ backgroundColor: '#eee', padding: '10px' }}>{`   +5V --- R ---+---- to scope probe
+      <pre style={pre}>{`   +5V --- R ---+---- to scope probe
                 |
                C
                 |
@@ -306,7 +512,7 @@ const Textbook = () => {
 
       <h3>7.2 555 Timer – Astable (Oscillator)</h3>
       <p>Produces a square wave. Frequency set by two resistors and a capacitor.</p>
-      <pre style={{ backgroundColor: '#eee', padding: '10px' }}>f = 1.44 / ((R1 + 2R2) × C)</pre>
+      <pre style={pre}>f = 1.44 / ((R1 + 2R2) × C)</pre>
       <p>Build a 1 Hz LED flasher with R1=1 kΩ, R2=10 kΩ, C=100 µF.</p>
       <p><strong>Monostable (one-shot):</strong> Output pulse length t = 1.1 × R × C. Use as a touch timer.</p>
 
@@ -351,7 +557,7 @@ const Textbook = () => {
 
       <hr />
       <p style={{ fontSize: 'small', textAlign: 'center' }}>
-        *This textbook is integrated into the Virtual Electronics Lab simulation. All circuits can be assembled by dragging components onto the breadboard. Open the “Textbook” panel to view this content while working.*
+        *This textbook is integrated into the Virtual Electronics Lab simulation. Every Workshop circuit can be built on the board with the Circuit Coach checking your work. Keep the Textbook tab open beside the board while you build.*
       </p>
     </div>
   );

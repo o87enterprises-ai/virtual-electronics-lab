@@ -1,4 +1,4 @@
-import { X, MousePointerClick, Move, Spline, Gauge, Flame, Rotate3D, Lightbulb, Power } from 'lucide-react';
+import { X, MousePointerClick, Move, Spline, Gauge, Flame, Rotate3D, Lightbulb, SquareMenu, Stethoscope } from 'lucide-react';
 
 const Row = ({ icon, title, children }) => (
   <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
@@ -46,15 +46,16 @@ export default function HelpModal({ onClose, onOpenProjects }) {
           Open <em>Parts</em>, pick a component, then tap any breadboard hole to drop it.
           Keep tapping to place more; press the ✕ chip (or Esc) to stop. R rotates before placing.
         </Row>
-        <Row icon={<Move size={16} />} title="Select, then choose an action">
-          Tap a part to select it — touching a part never moves it. Buttons appear
-          under the board: <strong>Move</strong> (arms dragging, or tap a hole to send
-          it there), <strong>Rotate</strong>, <strong>Action</strong>, and Delete.
+        <Row icon={<SquareMenu size={16} />} title="One click, one menu">
+          Click any part on the board and its menu opens beside it (at the bottom on
+          phones). Everything is there: press a button, switch the supply on and off,
+          set a resistor&apos;s value or an LED&apos;s colour, read the live multimeter, and
+          Move, Rotate or Delete. Click the part again or tap empty board to close it.
         </Row>
-        <Row icon={<Power size={16} />} title="Using a part">
-          <strong>Action</strong> is how you operate something: it presses and releases
-          a push button, and switches the power supply&apos;s output on and off. Parts with
-          nothing to actuate simply have no Action button.
+        <Row icon={<Move size={16} />} title="Moving parts">
+          Press <strong>Move</strong> in the menu, then tap the hole where the part should go
+          (Esc puts it back). With a mouse you can also just drag a part. Arrow keys
+          nudge the selected part one hole at a time.
         </Row>
         <Row icon={<Spline size={16} />} title="Magnetic wiring">
           Pick <em>Jumper Wire</em> and every terminal on the board lights up — red for
@@ -64,8 +65,13 @@ export default function HelpModal({ onClose, onOpenProjects }) {
         </Row>
         <Row icon={<Gauge size={16} />} title="It's always simulating">
           Add a DC power supply (red post = +, black = −) and the whole board is solved
-          live. Select any part to read its voltage, current, and power on the multimeter
-          in <em>Tools</em>. Resistor and supply values are editable there too.
+          live. Click any part to read its voltage, current, and power in its menu.
+        </Row>
+        <Row icon={<Stethoscope size={16} />} title="Circuit Coach">
+          Stuck? Open <em>Coach</em>. It lists what&apos;s wrong in build order: loose legs,
+          backwards LEDs, shorts, wrong values. Each problem comes with a fix, and
+          <strong> Show me</strong> points at it on the board. In a guided project it checks
+          every step as you build.
         </Row>
         <Row icon={<Flame size={16} />} title="Break things (safely)">
           Exceed a part&apos;s ratings — short the supply, skip an LED&apos;s resistor, reverse an

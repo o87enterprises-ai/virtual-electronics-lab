@@ -12,6 +12,31 @@ export const TERMINALS = {
   Capacitor: [[-1, 0], [1, 0]],
   Switch: [[-1, 0], [1, 0]],
   PowerSupply: [[-2, 3], [2, 3]], // [+ red post, − black post]
+  Transistor: [[-1, 0], [0, 0], [1, 0]], // [collector, base, emitter]
+};
+
+// Short names for each terminal, in TERMINALS order. Used by project
+// definitions ("D1.K") and by the circuit coach's messages.
+export const TERMINAL_NAMES = {
+  Resistor: ['1', '2'],
+  Wire: ['1', '2'],
+  Switch: ['1', '2'],
+  Diode: ['A', 'K'],
+  LED: ['A', 'K'],
+  Capacitor: ['+', '-'],
+  PowerSupply: ['+', '-'],
+  Transistor: ['C', 'B', 'E'],
+};
+
+// Parts whose legs are interchangeable — flipping one changes nothing.
+export const NON_POLAR = new Set(['Resistor', 'Wire', 'Switch']);
+
+// LED colours and their typical forward voltages.
+export const LED_COLORS = {
+  red: { vf: 1.9, hex: '#ff3333', label: 'Red' },
+  yellow: { vf: 2.0, hex: '#ffcc22', label: 'Yellow' },
+  green: { vf: 2.1, hex: '#33ff66', label: 'Green' },
+  blue: { vf: 3.0, hex: '#3399ff', label: 'Blue' },
 };
 
 export const DEFAULT_VALUES = {
@@ -27,6 +52,7 @@ export const RATINGS = {
   Resistor: { maxPower: 0.5 },      // ½ W
   PowerSupply: { maxCurrent: 2 },   // bench supply current limit
   Capacitor: { maxReverse: 1 },     // electrolytic: ~1 V reverse max
+  Transistor: { maxCurrent: 0.2, maxBase: 0.05 }, // 2N3904-class NPN
 };
 
 export const FAULT_MESSAGES = {
@@ -34,6 +60,7 @@ export const FAULT_MESSAGES = {
   overpower: 'Over power rating (>½ W) — use a bigger resistor or lower voltage',
   short: 'Short circuit — supply current limit exceeded',
   'reverse-polarity': 'Electrolytic capacitor reversed — check + / − orientation',
+  'base-overcurrent': 'Base current too high — the base needs a resistor (about 1 kΩ)',
 };
 
 const WIRE_G = 1e3;   // 1 mΩ jumper/closed switch
@@ -44,6 +71,14 @@ const DIODE_PARAMS = {
   Diode: { vf: 0.7, ron: 1 },
   LED: { vf: 1.9, ron: 10 },
 };
+
+// NPN model: base–emitter behaves like a diode; the collector then carries
+// β × base current until the transistor saturates at V_CE ≈ 0.2 V.
+const NPN = { beta: 100, vbe: 0.7, rbe: 20, vceSat: 0.2, rsat: 1 };
+
+const diodeParams = (c) => (c.type === 'LED'
+  ? { ...DIODE_PARAMS.LED, vf: (LED_COLORS[c.color] || LED_COLORS.red).vf }
+  : DIODE_PARAMS[c.type]);
 
 const cellOf = (x, z) => [Math.round(x / PITCH), Math.round(z / PITCH)];
 
@@ -111,12 +146,14 @@ export function runSimulation(components) {
 
   const conductors = [];   // { comp, g }
   const diodes = [];       // { comp, vf, ron, on }
+  const transistors = [];  // { comp, mode: 'off' | 'active' | 'sat' }
   for (const c of parts) {
     if (c.type === 'Resistor') conductors.push({ comp: c, g: 1 / Math.max(c.value ?? DEFAULT_VALUES.Resistor, 1e-3) });
     else if (c.type === 'Wire') conductors.push({ comp: c, g: WIRE_G });
     else if (c.type === 'Switch') conductors.push({ comp: c, g: c.pressed ? WIRE_G : OFF_G });
     else if (c.type === 'Capacitor') conductors.push({ comp: c, g: OFF_G });
-    else if (DIODE_PARAMS[c.type]) diodes.push({ comp: c, ...DIODE_PARAMS[c.type], on: false });
+    else if (DIODE_PARAMS[c.type]) diodes.push({ comp: c, ...diodeParams(c), on: false });
+    else if (c.type === 'Transistor') transistors.push({ comp: c, mode: 'off' });
   }
   // switched-off supplies contribute nothing but still need readings
   const idleSupplies = allSupplies.filter((c) => c.on === false);
@@ -149,6 +186,38 @@ export function runSimulation(components) {
         if (c >= 0) b[c] -= g * d.vf;
       }
     }
+    for (const q of transistors) {
+      const [nc, nb, ne] = nodesOf(q.comp);
+      if (q.mode === 'off') {
+        stampG(nb, ne, OFF_G);
+        stampG(nc, ne, OFF_G);
+        continue;
+      }
+      // base–emitter junction conducting
+      const gbe = 1 / NPN.rbe;
+      stampG(nb, ne, gbe);
+      if (nb >= 0) b[nb] += gbe * NPN.vbe;
+      if (ne >= 0) b[ne] -= gbe * NPN.vbe;
+      if (q.mode === 'active') {
+        // collector current source: I_C = β·g_be·(V_B − V_E − V_BE)
+        const gm = NPN.beta * gbe;
+        if (nc >= 0) {
+          if (nb >= 0) A[nc][nb] += gm;
+          if (ne >= 0) A[nc][ne] -= gm;
+          b[nc] += gm * NPN.vbe;
+        }
+        if (ne >= 0) {
+          if (nb >= 0) A[ne][nb] -= gm;
+          A[ne][ne] += gm;
+          b[ne] -= gm * NPN.vbe;
+        }
+      } else {
+        const gs = 1 / NPN.rsat;
+        stampG(nc, ne, gs);
+        if (nc >= 0) b[nc] += gs * NPN.vceSat;
+        if (ne >= 0) b[ne] -= gs * NPN.vceSat;
+      }
+    }
     supplies.forEach((s, k) => {
       const [a, c] = nodesOf(s);
       const row = n + k;
@@ -168,6 +237,23 @@ export function runSimulation(components) {
       const on = d.on ? vd >= d.vf - 1e-6 : vd > d.vf;
       if (on !== d.on) { d.on = on; changed = true; }
     }
+    for (const q of transistors) {
+      const [nc, nb, ne] = nodesOf(q.comp);
+      const vbe = volt(nb) - volt(ne);
+      const vce = volt(nc) - volt(ne);
+      const ib = (vbe - NPN.vbe) / NPN.rbe;
+      let mode = q.mode;
+      if (q.mode === 'off') {
+        if (vbe > NPN.vbe) mode = 'active';
+      } else if (vbe < NPN.vbe - 1e-6) {
+        mode = 'off';
+      } else if (q.mode === 'active' && vce < NPN.vceSat) {
+        mode = 'sat';
+      } else if (q.mode === 'sat' && (vce - NPN.vceSat) / NPN.rsat > NPN.beta * ib) {
+        mode = 'active';
+      }
+      if (mode !== q.mode) { q.mode = mode; changed = true; }
+    }
     if (!changed) break;
   }
 
@@ -182,6 +268,16 @@ export function runSimulation(components) {
     const [a, c] = nodesOf(d.comp);
     const v = volt(a) - volt(c);
     readings[d.comp.id] = { v, i: d.on ? (v - d.vf) / d.ron : 0 };
+  }
+  for (const q of transistors) {
+    const [nc, nb, ne] = nodesOf(q.comp);
+    const vbe = volt(nb) - volt(ne);
+    const vce = volt(nc) - volt(ne);
+    const ib = q.mode === 'off' ? 0 : (vbe - NPN.vbe) / NPN.rbe;
+    const ic = q.mode === 'off' ? 0
+      : q.mode === 'active' ? NPN.beta * ib : (vce - NPN.vceSat) / NPN.rsat;
+    // v/i report the collector–emitter path, the part's "main" current
+    readings[q.comp.id] = { v: vce, i: ic, ib, vbe, mode: q.mode };
   }
   supplies.forEach((s, k) => {
     const [a, c] = nodesOf(s);
@@ -202,6 +298,8 @@ export function runSimulation(components) {
     else if (c.type === 'PowerSupply' && Math.abs(r.i) > rating.maxCurrent) faults[c.id] = 'short';
     else if (c.type === 'Capacitor' && r.v < -rating.maxReverse) faults[c.id] = 'reverse-polarity';
     else if ((c.type === 'LED' || c.type === 'Diode') && Math.abs(r.i) > rating.maxCurrent) faults[c.id] = 'overcurrent';
+    else if (c.type === 'Transistor' && r.ib > rating.maxBase) faults[c.id] = 'base-overcurrent';
+    else if (c.type === 'Transistor' && Math.abs(r.i) > rating.maxCurrent) faults[c.id] = 'overcurrent';
   }
 
   return { status: 'ok', readings, faults, nodes: n };
