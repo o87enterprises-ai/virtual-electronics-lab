@@ -1,0 +1,5 @@
+# Cloudflare Pages config. Build with `npm run build`, then deploy the
+# static site in dist/ with `npm run deploy` (runs `wrangler pages deploy`).
+name = "virtual-electronics-lab"
+pages_build_output_dir = "./dist"
+compatibility_date = "2026-09-25"
