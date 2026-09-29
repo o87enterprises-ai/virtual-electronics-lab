@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { Component, useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Canvas, useThree, useFrame } from '@react-three/fiber';
 import { OrbitControls, ContactShadows, PerspectiveCamera, Html } from '@react-three/drei';
 import * as THREE from 'three';
@@ -57,6 +57,38 @@ function useIsMobile() {
 // Exposes the live three.js state (camera, renderer, controls) to DOM-side
 // handlers, so drags can attach their listeners imperatively at pointerdown
 // instead of waiting on a canvas-side React effect that can commit late.
+function hasWebGL() {
+  try {
+    const c = document.createElement('canvas');
+    return !!(c.getContext('webgl2') || c.getContext('webgl'));
+  } catch {
+    return false;
+  }
+}
+
+class Board3DBoundary extends Component {
+  state = { failed: false };
+  static getDerivedStateFromError() { return { failed: true }; }
+  componentDidCatch(err) { console.warn('3D board unavailable:', err?.message); }
+  render() { return this.state.failed ? this.props.fallback : this.props.children; }
+}
+
+function NoWebGLNotice() {
+  return (
+    <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
+      <div style={{ maxWidth: 440, background: '#141414', border: '1px solid #2a2a2a', borderRadius: 14, padding: '22px 24px', color: '#ddd', fontSize: 14, lineHeight: 1.6 }}>
+        <div style={{ fontSize: 17, fontWeight: 700, color: '#fff', marginBottom: 8 }}>The 3D board can&apos;t start in this browser</div>
+        <p style={{ margin: '0 0 10px' }}>OpenCircuitry needs WebGL (3D graphics), and this browser has it turned off or unavailable. Usually it&apos;s the hardware-acceleration setting:</p>
+        <ul style={{ margin: '0 0 10px', paddingLeft: 18 }}>
+          <li><b>Chrome / Edge:</b> Settings → System → turn on &ldquo;Use graphics acceleration when available&rdquo;, then restart the browser.</li>
+          <li><b>Firefox:</b> Settings → General → Performance → allow hardware acceleration, then restart.</li>
+        </ul>
+        <p style={{ margin: 0, color: '#999' }}>Still blank? Update your graphics driver, or try another browser. The Textbook and Coach panels work without 3D.</p>
+      </div>
+    </div>
+  );
+}
+
 function CanvasBridge({ ctxRef }) {
   const three = useThree();
   useEffect(() => { ctxRef.current = three; });
@@ -137,6 +169,7 @@ const chipStyle = {
 
 export default function App() {
   const isMobile = useIsMobile();
+  const webglOk = useMemo(() => hasWebGL(), []);
   // Right drawer shows the Circuit Coach or the textbook.
   const [rightTab, setRightTab] = useState('coach');
   const [placedComponents, setPlacedComponents] = useState([]);
@@ -614,6 +647,8 @@ export default function App() {
 
   return (
     <div style={{ width: '100%', height: '100%', position: 'relative', background: '#0a0a0a' }}>
+      {!webglOk ? <NoWebGLNotice /> : (
+      <Board3DBoundary fallback={<NoWebGLNotice />}>
       <Canvas shadows onPointerUp={() => { document.body.style.cursor = 'auto'; }}>
         <PerspectiveCamera makeDefault position={[0.6, 0.6, 0.6]} fov={40} />
         <color attach="background" args={['#0a0a0a']} />
@@ -741,6 +776,8 @@ export default function App() {
         />
         <gridHelper args={[10, 40, 0x151515, 0x111111]} position={[0, -0.11, 0]} />
       </Canvas>
+      </Board3DBoundary>
+      )}
 
       {/* UI overlays — the layer and layout rows pass pointer events through to
           the canvas; panels and buttons re-enable them individually. */}
