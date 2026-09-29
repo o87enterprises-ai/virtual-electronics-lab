@@ -5,15 +5,17 @@
 import {
   X, Move, RotateCw, Trash2, Power, CircleDot, TriangleAlert, Lightbulb, Gauge,
 } from 'lucide-react';
-import { FAULT_MESSAGES, LED_COLORS } from '../lib/simulate';
+import { FAULT_MESSAGES, LED_COLORS, CELL_TYPES, MAGNET_SPEEDS } from '../lib/simulate';
 
 const TYPE_LABELS = {
   Resistor: 'Resistor', LED: 'LED', Capacitor: 'Capacitor', Diode: 'Diode (1N4001)',
   Transistor: 'Transistor (NPN)', IC: 'IC (555 Timer)', Switch: 'Push Button',
   PowerSupply: 'DC Power Supply', Antenna: 'Antenna', Magnet: 'Magnet', Wire: 'Jumper Wire',
+  Coil: 'Wire Coil', Cell: 'Battery Cell (DIY)', Speaker: 'Earphone', Mic: 'Microphone',
 };
 
-const SIMULATED = new Set(['Resistor', 'LED', 'Capacitor', 'Diode', 'Switch', 'PowerSupply', 'Wire', 'Transistor']);
+const SIMULATED = new Set(['Resistor', 'LED', 'Capacitor', 'Diode', 'Switch', 'PowerSupply', 'Wire', 'Transistor', 'Coil', 'Cell', 'Speaker', 'Mic']);
+const COIL_PRESETS = [50, 100, 250, 500, 1000];
 const RESISTOR_PRESETS = [220, 330, 1000, 10000, 100000];
 
 const fmt = (value, unit) => {
@@ -118,7 +120,56 @@ export default function PartMenu({
         </button>
       )}
 
+      {comp.type === 'Magnet' && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <button
+            onClick={() => onUpdate(comp.id, { spinning: !comp.spinning })}
+            style={{
+              ...btn, padding: '11px 8px', fontWeight: 600, fontSize: '0.85rem',
+              background: comp.spinning ? '#14532d' : '#262626',
+              border: `1px solid ${comp.spinning ? '#22c55e' : '#3d3d3d'}`,
+              color: comp.spinning ? '#9af5b8' : '#e6e6e6',
+            }}
+          >
+            <RotateCw size={16} /> {comp.spinning ? 'Spinning — tap to stop' : 'Still — tap to spin it'}
+          </button>
+          <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+            <span style={{ fontSize: '0.78rem', color: '#aaa', marginRight: 2 }}>Speed</span>
+            {Object.entries(MAGNET_SPEEDS).map(([k, label]) => (
+              <button key={k} onClick={() => onUpdate(comp.id, { speed: Number(k) })} style={chip((comp.speed ?? 2) === Number(k))}>{label}</button>
+            ))}
+          </div>
+          <div style={{ fontSize: '0.72rem', color: '#888', lineHeight: 1.4 }}>A spinning magnet within 5 holes of a coil induces a voltage in it (Faraday&apos;s law).</div>
+        </div>
+      )}
+
       {/* values */}
+      {comp.type === 'Coil' && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.78rem', color: '#aaa' }}>
+            Turns
+            <input
+              type="number" min="1" max="5000" value={comp.value ?? 100} style={input}
+              onChange={(e) => onUpdate(comp.id, { value: Math.min(Math.max(Math.round(Number(e.target.value)) || 1, 1), 5000) })}
+            />
+          </label>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+            {COIL_PRESETS.map((t) => (
+              <button key={t} onClick={() => onUpdate(comp.id, { value: t })} style={chip((comp.value ?? 100) === t)}>{t}</button>
+            ))}
+          </div>
+        </div>
+      )}
+      {comp.type === 'Cell' && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+          <span style={{ fontSize: '0.78rem', color: '#aaa' }}>Electrodes</span>
+          {Object.entries(CELL_TYPES).map(([k, t]) => (
+            <button key={k} onClick={() => onUpdate(comp.id, { metal: k })} style={{ ...chip((comp.metal || 'zn-cu') === k), textAlign: 'left', borderRadius: 8 }}>
+              {t.label} · ≈{t.emf} V
+            </button>
+          ))}
+        </div>
+      )}
       {comp.type === 'Resistor' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
           <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.78rem', color: '#aaa' }}>
@@ -181,15 +232,21 @@ export default function PartMenu({
               </>
             ) : (
               <>
-                <div>V {fmt(reading.v, 'V')} · I {fmt(reading.i, 'A')}</div>
+                <div>V {fmt(reading.v, 'V')} · I {fmt(reading.i, 'A')}{reading.ac ? ' (AC, RMS)' : ''}</div>
+                {reading.emf !== undefined && <div style={{ color: '#88bbff' }}>{comp.type === 'Coil' ? 'Induced' : 'Cell'} EMF {fmt(Math.abs(reading.emf), 'V')}</div>}
+                {comp.type === 'Coil' && reading.emf === undefined && <div style={{ color: '#88bbff' }}>Field {reading.field > 1 ? 'ON' : 'off'} · {(reading.field ?? 0).toFixed(1)} ampere-turns</div>}
                 <div style={{ color: fault ? '#ff7755' : '#3a9a6a' }}>P {fmt(Math.abs(reading.v * reading.i), 'W')}</div>
               </>
             )}
           </div>
         ) : (
           <div style={{ fontSize: '0.72rem', color: '#555' }}>
-            {!SIMULATED.has(comp.type)
-              ? 'This part isn\'t simulated yet'
+            {comp.type === 'Magnet'
+              ? 'No legs to measure — it induces voltage in coils nearby'
+              : comp.type === 'Antenna'
+                ? 'Catches radio waves — measure the circuit it feeds'
+                : !SIMULATED.has(comp.type)
+                  ? 'This part isn\'t simulated yet'
               : comp.type === 'PowerSupply' && !on
                 ? 'Output is off'
                 : 'No reading — add a powered supply'}

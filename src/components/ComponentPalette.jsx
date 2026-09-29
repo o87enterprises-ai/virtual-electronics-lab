@@ -1,6 +1,7 @@
 import {
   Zap, Radio, Circle, Layout, Cpu, Power,
-  Wifi, Magnet as MagnetIcon, MousePointer2, ToggleLeft, X
+  Wifi, Magnet as MagnetIcon, MousePointer2, ToggleLeft, X,
+  Waves, Citrus, Headphones, Mic,
 } from 'lucide-react';
 
 export default function ComponentPalette({ onSelect, selectedType, onClose }) {
@@ -23,12 +24,21 @@ export default function ComponentPalette({ onSelect, selectedType, onClose }) {
       ]
     },
     {
-      name: 'Power & Others',
+      name: 'Power & Controls',
       items: [
         { id: 'PowerSupply', name: 'DC Power Supply', icon: <Power size={16} />, color: '#444' },
+        { id: 'Cell', name: 'Battery Cell (DIY)', icon: <Citrus size={16} />, color: '#f5d928' },
         { id: 'Switch', name: 'Push Button', icon: <ToggleLeft size={16} />, color: '#333' },
-        { id: 'Antenna', name: 'Antenna', icon: <Wifi size={16} />, color: 'silver' },
+      ]
+    },
+    {
+      name: 'Magnetism & Radio',
+      items: [
+        { id: 'Coil', name: 'Wire Coil', icon: <Waves size={16} />, color: '#c8743a' },
         { id: 'Magnet', name: 'Magnet', icon: <MagnetIcon size={16} />, color: 'red' },
+        { id: 'Antenna', name: 'Antenna', icon: <Wifi size={16} />, color: 'silver' },
+        { id: 'Speaker', name: 'Earphone', icon: <Headphones size={16} />, color: '#888' },
+        { id: 'Mic', name: 'Microphone', icon: <Mic size={16} />, color: '#888' },
       ]
     }
   ];

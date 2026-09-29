@@ -15,6 +15,7 @@ export const PART_NAMES = {
   Resistor: 'resistor', LED: 'LED', Capacitor: 'capacitor', Diode: 'diode',
   Transistor: 'transistor', IC: 'IC', Switch: 'push button',
   PowerSupply: 'power supply', Antenna: 'antenna', Magnet: 'magnet', Wire: 'jumper wire',
+  Coil: 'wire coil', Cell: 'battery cell', Speaker: 'earphone', Mic: 'microphone',
 };
 
 const TERMINAL_LABELS = {
@@ -26,10 +27,17 @@ const TERMINAL_LABELS = {
   Resistor: ['one leg', 'other leg'],
   Switch: ['one leg', 'other leg'],
   Wire: ['one end', 'other end'],
+  Coil: ['one end', 'other end'],
+  Cell: ['+ electrode (copper)', '− electrode (zinc)'],
+  Speaker: ['one leg', 'other leg'],
+  Mic: ['+ leg', '− leg'],
+  Antenna: ['feed point'],
 };
 
 const fmtOhms = (r) => (r >= 1000 ? `${+(r / 1000).toFixed(2)} kΩ` : `${r} Ω`);
-const fmtValue = (type, v) => (type === 'Resistor' ? fmtOhms(v) : type === 'PowerSupply' ? `${v} V` : `${v}`);
+const fmtValue = (type, v) => (type === 'Resistor' ? fmtOhms(v)
+  : type === 'PowerSupply' ? `${v} V`
+    : type === 'Coil' ? `${v} turns` : `${v}`);
 
 // Union-find over holes: a part's legs sit in holes, and a jumper joins the
 // two holes at its ends. (Only ends connect — a wire passing over a hole
@@ -69,6 +77,9 @@ export function projectComponents(project, restY = () => 0, idPrefix = 'ref') {
     ...(p.value !== undefined ? { value: p.value } : {}),
     ...(p.color !== undefined ? { color: p.color } : {}),
     ...(p.pressed !== undefined ? { pressed: p.pressed } : {}),
+    ...(p.metal !== undefined ? { metal: p.metal } : {}),
+    ...(p.spinning !== undefined ? { spinning: p.spinning } : {}),
+    ...(p.speed !== undefined ? { speed: p.speed } : {}),
     ...(p.type === 'PowerSupply' ? { on: true } : {}),
   }));
 }
@@ -217,8 +228,19 @@ export function checkProject(project, components, sim) {
           title: `${role.ref} is ${fmtValue(role.type, m.comp.value)} — this build needs ${fmtValue(role.type, role.value)}`,
           detail: role.type === 'Resistor'
             ? 'The resistor value sets how much current flows. The wrong value can leave an LED dim, or burn it out.'
-            : 'The supply voltage sets how hard the circuit is pushed.',
+            : role.type === 'Coil'
+              ? 'The number of turns sets how strong the coil\'s magnetic field is, and how much voltage a magnet can induce in it.'
+              : 'The supply voltage sets how hard the circuit is pushed.',
           fix: `Click ${role.ref} and set its value to ${fmtValue(role.type, role.value)} in the menu.`,
+          partIds: [m.comp.id], cells: [],
+        });
+      }
+      if (role.metal !== undefined && (m.comp.metal || 'zn-cu') !== role.metal) {
+        problems.push({
+          severity: 'warn', step: n,
+          title: `${role.ref} uses different metals from the guide`,
+          detail: 'The pair of metals sets a cell\'s voltage, so readings will differ from the guide.',
+          fix: `Click ${role.ref} and pick the metals the guide uses.`,
           partIds: [m.comp.id], cells: [],
         });
       }
@@ -285,13 +307,19 @@ export function checkProject(project, components, sim) {
     }
 
     if (step.expect) {
-      const { ref, pressed, on, lit } = step.expect;
+      const { ref, pressed, on, lit, spinning, field } = step.expect;
       const m = assign[ref];
       if (!m) return { status: 'todo', issue: null };
       if (pressed !== undefined && !!m.comp.pressed !== pressed) {
         return { status: 'todo', issue: null, action: { partIds: [m.comp.id] } };
       }
       if (on !== undefined && (m.comp.on !== false) !== on) {
+        return { status: 'todo', issue: null, action: { partIds: [m.comp.id] } };
+      }
+      if (spinning !== undefined && !!m.comp.spinning !== spinning) {
+        return { status: 'todo', issue: null, action: { partIds: [m.comp.id] } };
+      }
+      if (field !== undefined && ((sim?.readings?.[m.comp.id]?.field ?? 0) > 1) !== field) {
         return { status: 'todo', issue: null, action: { partIds: [m.comp.id] } };
       }
       if (lit !== undefined) {
@@ -450,14 +478,18 @@ export function checkCircuit(components, sim) {
     }];
   }
   const supplies = components.filter((c) => c.type === 'PowerSupply');
-  if (supplies.length === 0) {
+  // Cells, a magnet-and-coil generator, or (for a crystal radio) the radio
+  // waves caught by an antenna can power a circuit without a supply.
+  const otherSources = components.some((c) => ['Cell', 'Antenna'].includes(c.type))
+    || (components.some((c) => c.type === 'Magnet') && components.some((c) => c.type === 'Coil'));
+  if (supplies.length === 0 && !otherSources) {
     issues.push({
       severity: 'error', title: 'There\'s no power supply',
       detail: 'Nothing moves without a source of voltage — it\'s the “pump” that pushes current around the loop.',
       fix: 'Open Parts and place a DC Power Supply.',
       partIds: [], cells: [],
     });
-  } else if (supplies.every((s) => s.on === false)) {
+  } else if (supplies.length && supplies.every((s) => s.on === false)) {
     issues.push({
       severity: 'error', title: 'The power supply is switched off',
       fix: 'Click the power supply and press Turn On.',
@@ -545,20 +577,23 @@ export function checkCircuit(components, sim) {
 
   // Everything connected, yet nothing flows: the loop is open somewhere.
   if (sim?.status === 'ok' && !issues.some((i) => i.severity === 'error')) {
-    const flowing = supplies.some((sp) => Math.abs(sim.readings[sp.id]?.i ?? 0) > 1e-5);
-    const loads = components.filter((c) => !['Wire', 'PowerSupply'].includes(c.type) && TERMINALS[c.type]);
+    const sources = components.filter((c) => c.type === 'PowerSupply' || c.type === 'Cell'
+      || (c.type === 'Coil' && sim.readings[c.id]?.emf));
+    const flowing = sources.some((sp) => Math.abs(sim.readings[sp.id]?.i ?? 0) > 1e-5);
+    const loads = components.filter((c) => !['Wire', 'PowerSupply', 'Cell', 'Antenna'].includes(c.type) && TERMINALS[c.type]
+      && !(c.type === 'Coil' && sim.readings[c.id]?.emf));
     if (!flowing && loads.length && !issues.some((i) => i.title.startsWith('A push button'))) {
       issues.push({
         severity: 'error',
         title: 'No current is flowing — the loop isn\'t closed',
         detail: 'Current has to leave the red + post, pass through your parts, and come back to the black − post. Somewhere that path is broken or blocked.',
         fix: 'Trace the path with your finger from + to −. Check that each connection shares a hole or has a wire, and that LEDs and diodes point from + towards −.',
-        partIds: supplies.map((sp) => sp.id), cells: [],
+        partIds: sources.map((sp) => sp.id), cells: [],
       });
     }
   }
 
-  const unsimulated = components.filter((c) => ['IC', 'Antenna', 'Magnet'].includes(c.type));
+  const unsimulated = components.filter((c) => c.type === 'IC');
   if (unsimulated.length) {
     issues.push({
       severity: 'info',

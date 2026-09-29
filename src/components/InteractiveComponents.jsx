@@ -1,3 +1,5 @@
+import { useRef } from 'react';
+import { useFrame } from '@react-three/fiber';
 import { Box, Cylinder, Sphere } from '@react-three/drei';
 
 // Selection highlight, sized per component
@@ -177,12 +179,94 @@ export function Antenna({ selected }) {
   );
 }
 
-export function Magnet({ selected }) {
+export function Magnet({ selected, spinning = false, speed = 2 }) {
+  const spin = useRef();
+  useFrame((_, dt) => {
+    if (spin.current && spinning) spin.current.rotation.y += dt * speed * 4;
+  });
   return (
     <group>
-      <Box castShadow args={[0.1, 0.05, 0.05]} position={[-0.05, 0, 0]}><meshStandardMaterial color="red" /></Box>
-      <Box castShadow args={[0.1, 0.05, 0.05]} position={[0.05, 0, 0]}><meshStandardMaterial color="blue" /></Box>
+      <group ref={spin}>
+        <Box castShadow args={[0.1, 0.05, 0.05]} position={[-0.05, 0, 0]}><meshStandardMaterial color="red" /></Box>
+        <Box castShadow args={[0.1, 0.05, 0.05]} position={[0.05, 0, 0]}><meshStandardMaterial color="blue" /></Box>
+      </group>
       <Highlight selected={selected} size={0.24} />
+    </group>
+  );
+}
+
+// Enamelled copper wound on a core; legs two holes either side of centre.
+// Glows faintly when current makes a magnetic field.
+export function Coil({ selected, turns = 100, field = 0 }) {
+  const rings = Math.min(4 + Math.round(turns / 40), 16);
+  const glow = Math.min(field / 20, 1);
+  return (
+    <group>
+      <Cylinder castShadow args={[0.012, 0.012, 0.14]} rotation={[0, 0, Math.PI / 2]} position={[0, 0.03, 0]}>
+        <meshStandardMaterial color="#555" />
+      </Cylinder>
+      {Array.from({ length: rings }, (_, k) => (
+        <mesh key={k} position={[-0.06 + (0.12 * k) / Math.max(rings - 1, 1), 0.03, 0]} rotation={[0, Math.PI / 2, 0]}>
+          <torusGeometry args={[0.022, 0.004, 8, 20]} />
+          <meshStandardMaterial color="#c8743a" metalness={0.6} roughness={0.35} emissive="#4488ff" emissiveIntensity={glow * 1.5} />
+        </mesh>
+      ))}
+      {glow > 0.02 && <pointLight position={[0, 0.05, 0]} color="#4488ff" intensity={glow * 0.1} distance={0.2} decay={2} />}
+      <Box args={[0.005, 0.03, 0.005]} position={[-0.1, 0.005, 0]}><meshStandardMaterial color="#c8743a" /></Box>
+      <Box args={[0.005, 0.03, 0.005]} position={[0.1, 0.005, 0]}><meshStandardMaterial color="#c8743a" /></Box>
+      <Box args={[0.04, 0.004, 0.004]} position={[-0.08, 0.02, 0]}><meshStandardMaterial color="#c8743a" /></Box>
+      <Box args={[0.04, 0.004, 0.004]} position={[0.08, 0.02, 0]}><meshStandardMaterial color="#c8743a" /></Box>
+      <Highlight selected={selected} size={0.22} y={0.02} />
+    </group>
+  );
+}
+
+// Homemade cell: + electrode (copper, or carbon rod) at −x, − electrode
+// (zinc or aluminium) at +x, stuck into a lemon, a jar of salt water, or a
+// dry-cell can.
+export function Cell({ selected, metal = 'zn-cu' }) {
+  const body = metal === 'zn-c'
+    ? <Cylinder castShadow args={[0.028, 0.028, 0.09]} rotation={[0, 0, Math.PI / 2]} position={[0, 0.03, 0]}><meshStandardMaterial color="#1c1c1c" /></Cylinder>
+    : metal === 'al-cu'
+      ? <Cylinder castShadow args={[0.045, 0.045, 0.06]} position={[0, 0.03, 0]}><meshStandardMaterial color="#6fb7ff" transparent opacity={0.45} /></Cylinder>
+      : <mesh castShadow position={[0, 0.035, 0]} scale={[1.35, 0.85, 0.9]}><sphereGeometry args={[0.042, 20, 16]} /><meshStandardMaterial color="#f5d928" roughness={0.8} /></mesh>;
+  const plus = metal === 'zn-c' ? '#222' : '#c8743a';
+  const minus = metal === 'al-cu' ? '#d8d8dc' : '#9aa0a6';
+  return (
+    <group>
+      {body}
+      <Box castShadow args={[0.006, 0.07, 0.02]} position={[-0.04, 0.05, 0]}><meshStandardMaterial color={plus} metalness={0.6} /></Box>
+      <Box castShadow args={[0.006, 0.07, 0.02]} position={[0.04, 0.05, 0]}><meshStandardMaterial color={minus} metalness={0.6} /></Box>
+      <Box args={[0.06, 0.004, 0.004]} position={[-0.07, 0.085, 0]}><meshStandardMaterial color="#c8743a" /></Box>
+      <Box args={[0.06, 0.004, 0.004]} position={[0.07, 0.085, 0]}><meshStandardMaterial color="#9aa0a6" /></Box>
+      <Box args={[0.004, 0.09, 0.004]} position={[-0.1, 0.04, 0]}><meshStandardMaterial color="#c8743a" /></Box>
+      <Box args={[0.004, 0.09, 0.004]} position={[0.1, 0.04, 0]}><meshStandardMaterial color="#9aa0a6" /></Box>
+      <Highlight selected={selected} size={0.22} y={0.04} />
+    </group>
+  );
+}
+
+export function Speaker({ selected }) {
+  return (
+    <group>
+      <Cylinder castShadow args={[0.04, 0.04, 0.02, 24]} position={[0, 0.02, 0]}><meshStandardMaterial color="#1a1a1a" /></Cylinder>
+      <Cylinder args={[0.028, 0.028, 0.002, 24]} position={[0, 0.031, 0]}><meshStandardMaterial color="#444" /></Cylinder>
+      <Box args={[0.005, 0.03, 0.005]} position={[-0.05, 0.005, 0]}><meshStandardMaterial color="silver" /></Box>
+      <Box args={[0.005, 0.03, 0.005]} position={[0.05, 0.005, 0]}><meshStandardMaterial color="silver" /></Box>
+      <Highlight selected={selected} size={0.12} y={0.02} />
+    </group>
+  );
+}
+
+export function Mic({ selected }) {
+  return (
+    <group>
+      <Cylinder castShadow args={[0.02, 0.02, 0.025, 20]} position={[0, 0.025, 0]}><meshStandardMaterial color="#111" /></Cylinder>
+      <Cylinder args={[0.017, 0.017, 0.002, 20]} position={[0, 0.038, 0]}><meshStandardMaterial color="#3a3a3a" roughness={1} /></Cylinder>
+      <Box args={[0.005, 0.03, 0.005]} position={[-0.05, 0.005, 0]}><meshStandardMaterial color="silver" /></Box>
+      <Box args={[0.005, 0.03, 0.005]} position={[0.05, 0.005, 0]}><meshStandardMaterial color="silver" /></Box>
+      <Box args={[0.1, 0.004, 0.004]} position={[0, 0.015, 0]}><meshStandardMaterial color="silver" /></Box>
+      <Highlight selected={selected} size={0.12} y={0.02} />
     </group>
   );
 }

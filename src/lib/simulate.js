@@ -13,6 +13,11 @@ export const TERMINALS = {
   Switch: [[-1, 0], [1, 0]],
   PowerSupply: [[-2, 3], [2, 3]], // [+ red post, − black post]
   Transistor: [[-1, 0], [0, 0], [1, 0]], // [collector, base, emitter]
+  Coil: [[-2, 0], [2, 0]],
+  Cell: [[-2, 0], [2, 0]],        // [+ electrode, − electrode]
+  Speaker: [[-1, 0], [1, 0]],     // earphone / small speaker
+  Mic: [[-1, 0], [1, 0]],         // [+, −] electret microphone
+  Antenna: [[0, 0]],              // one leg: the aerial's feed point
 };
 
 // Short names for each terminal, in TERMINALS order. Used by project
@@ -26,10 +31,15 @@ export const TERMINAL_NAMES = {
   Capacitor: ['+', '-'],
   PowerSupply: ['+', '-'],
   Transistor: ['C', 'B', 'E'],
+  Coil: ['1', '2'],
+  Cell: ['+', '-'],
+  Speaker: ['1', '2'],
+  Mic: ['+', '-'],
+  Antenna: ['1'],
 };
 
 // Parts whose legs are interchangeable — flipping one changes nothing.
-export const NON_POLAR = new Set(['Resistor', 'Wire', 'Switch']);
+export const NON_POLAR = new Set(['Resistor', 'Wire', 'Switch', 'Coil', 'Speaker']);
 
 // LED colours and their typical forward voltages.
 export const LED_COLORS = {
@@ -42,7 +52,41 @@ export const LED_COLORS = {
 export const DEFAULT_VALUES = {
   Resistor: 1000,   // ohms
   PowerSupply: 5,   // volts
+  Coil: 100,        // turns of wire
 };
+
+// Homemade battery cells: two different metals in an electrolyte. The EMF
+// comes from the metals; the internal resistance from the electrolyte, which
+// is why a lemon cell can't push much current.
+export const CELL_TYPES = {
+  'zn-cu': { label: 'Zinc + copper (lemon)', emf: 0.95, rint: 500 },
+  'al-cu': { label: 'Aluminium + copper (salt water)', emf: 0.6, rint: 300 },
+  'zn-c': { label: 'Zinc + carbon (dry cell)', emf: 1.5, rint: 0.5 },
+};
+export const DEFAULT_CELL = 'zn-cu';
+
+// Coils: resistance grows with the length of wire; a magnet spinning next to
+// one induces an EMF proportional to turns × speed (Faraday's law).
+export const COIL_OHMS_PER_TURN = 0.02;
+export const MAGNET_SPEEDS = { 1: 'Slow', 2: 'Medium', 3: 'Fast' };
+const EMF_PER_TURN_PER_SPEED = 0.004; // volts (RMS-equivalent)
+const INDUCTION_RANGE_CELLS = 5;      // magnet must sit this close to the coil
+const SPEAKER_OHMS = 32;
+const MIC_OHMS = 2200;
+
+const coilOhms = (c) => Math.max((c.value ?? DEFAULT_VALUES.Coil) * COIL_OHMS_PER_TURN, 0.1);
+
+// EMF induced in a coil by any spinning magnet within range.
+export function inducedEmf(coil, components) {
+  const [ci, cj] = [coil.position[0] / PITCH, coil.position[2] / PITCH];
+  let emf = 0;
+  for (const m of components) {
+    if (m.type !== 'Magnet' || !m.spinning) continue;
+    const d = Math.hypot(m.position[0] / PITCH - ci, m.position[2] / PITCH - cj);
+    if (d <= INDUCTION_RANGE_CELLS) emf += (coil.value ?? DEFAULT_VALUES.Coil) * (m.speed ?? 2) * EMF_PER_TURN_PER_SPEED;
+  }
+  return emf;
+}
 
 // Absolute maximum ratings; exceeding one flags a fault (smoke/sparks in the
 // scene, warning in the multimeter).
@@ -124,19 +168,51 @@ function solveLinear(A, b) {
 // DC operating point of the placed components via modified nodal analysis.
 // Returns { status, readings } where readings maps component id to
 // { v (volts across, first terminal minus second), i (amps through) }.
+// A magnet spinning next to a coil makes alternating current. The DC solver
+// runs each half-cycle and keeps, per part, whichever half moved more current:
+// an LED on a generator lights on one half-cycle whichever way round it is.
 export function runSimulation(components) {
+  const first = solveOnce(components, 1);
+  const induced = components.some((c) => c.type === 'Coil' && inducedEmf(c, components) > 0);
+  if (!induced || first.status !== 'ok') return first;
+  const second = solveOnce(components, -1);
+  if (second.status !== 'ok') return first;
+  const readings = {};
+  for (const id of new Set([...Object.keys(first.readings), ...Object.keys(second.readings)])) {
+    const a = first.readings[id];
+    const b = second.readings[id];
+    readings[id] = !b || (a && Math.abs(a.i) >= Math.abs(b.i)) ? a : b;
+    if (readings[id]) readings[id] = { ...readings[id], ac: true };
+  }
+  return { ...first, readings, faults: { ...second.faults, ...first.faults }, ac: true };
+}
+
+function solveOnce(components, emfSign) {
   const parts = components.filter((c) => TERMINALS[c.type]);
   const allSupplies = parts.filter((c) => c.type === 'PowerSupply');
   // A supply switched off is an open output: it still defines the ground
   // reference, but sources nothing.
   const supplies = allSupplies.filter((c) => c.on !== false);
-  if (allSupplies.length === 0) return { status: 'no-power', readings: {}, faults: {} };
-  if (supplies.length === 0) return { status: 'powered-off', readings: {}, faults: {} };
+  // Cells and coils with a spinning magnet nearby are sources too, modelled
+  // as an EMF behind an internal resistance (a Norton equivalent).
+  const emfSources = [];
+  for (const c of parts) {
+    if (c.type === 'Cell') {
+      const t = CELL_TYPES[c.metal] || CELL_TYPES[DEFAULT_CELL];
+      emfSources.push({ comp: c, emf: t.emf, r: t.rint });
+    } else if (c.type === 'Coil') {
+      const emf = inducedEmf(c, components);
+      if (emf > 0) emfSources.push({ comp: c, emf: emf * emfSign, r: coilOhms(c) });
+    }
+  }
+  if (allSupplies.length === 0 && emfSources.length === 0) return { status: 'no-power', readings: {}, faults: {} };
+  if (supplies.length === 0 && emfSources.length === 0) return { status: 'powered-off', readings: {}, faults: {} };
 
-  // Map every referenced hole to a node; the first supply's − post is ground.
+  // Map every referenced hole to a node; a supply's − post (or else a
+  // source's − terminal) is ground.
   const cellKeysOf = new Map();
   for (const c of parts) cellKeysOf.set(c.id, terminalCells(c).map(([i, j]) => `${i},${j}`));
-  const groundKey = cellKeysOf.get(supplies[0].id)[1];
+  const groundKey = cellKeysOf.get((supplies[0] || emfSources[0].comp).id)[1];
   const nodeIndex = new Map([[groundKey, -1]]);
   for (const keys of cellKeysOf.values())
     for (const key of keys)
@@ -152,6 +228,9 @@ export function runSimulation(components) {
     else if (c.type === 'Wire') conductors.push({ comp: c, g: WIRE_G });
     else if (c.type === 'Switch') conductors.push({ comp: c, g: c.pressed ? WIRE_G : OFF_G });
     else if (c.type === 'Capacitor') conductors.push({ comp: c, g: OFF_G });
+    else if (c.type === 'Coil' && !emfSources.some((e) => e.comp === c)) conductors.push({ comp: c, g: 1 / coilOhms(c) });
+    else if (c.type === 'Speaker') conductors.push({ comp: c, g: 1 / SPEAKER_OHMS });
+    else if (c.type === 'Mic') conductors.push({ comp: c, g: 1 / MIC_OHMS });
     else if (DIODE_PARAMS[c.type]) diodes.push({ comp: c, ...diodeParams(c), on: false });
     else if (c.type === 'Transistor') transistors.push({ comp: c, mode: 'off' });
   }
@@ -176,6 +255,13 @@ export function runSimulation(components) {
     for (const el of conductors) {
       const [a, c] = nodesOf(el.comp);
       stampG(a, c, el.g);
+    }
+    for (const src of emfSources) {
+      const [a, c] = nodesOf(src.comp);
+      const g = 1 / src.r;
+      stampG(a, c, g);
+      if (a >= 0) b[a] += g * src.emf;
+      if (c >= 0) b[c] -= g * src.emf;
     }
     for (const d of diodes) {
       const [a, c] = nodesOf(d.comp);
@@ -268,6 +354,18 @@ export function runSimulation(components) {
     const [a, c] = nodesOf(d.comp);
     const v = volt(a) - volt(c);
     readings[d.comp.id] = { v, i: d.on ? (v - d.vf) / d.ron : 0 };
+  }
+  for (const src of emfSources) {
+    const [a, c] = nodesOf(src.comp);
+    const v = volt(a) - volt(c);
+    // current delivered out of the + terminal into the circuit
+    readings[src.comp.id] = { v, i: (src.emf - v) / src.r, emf: src.emf };
+  }
+  for (const c of parts) {
+    if (c.type !== 'Coil' || !readings[c.id]) continue;
+    const turns = c.value ?? DEFAULT_VALUES.Coil;
+    readings[c.id].field = turns * Math.abs(readings[c.id].i); // ampere-turns
+    readings[c.id].turns = turns;
   }
   for (const q of transistors) {
     const [nc, nb, ne] = nodesOf(q.comp);

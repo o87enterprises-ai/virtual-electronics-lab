@@ -7,6 +7,7 @@ const FOOTPRINT = {
   Resistor: [3, 0], Diode: [2, 0], LED: [1, 0], Capacitor: [1, 1],
   Transistor: [1, 0], IC: [2, 2], Switch: [1, 0], PowerSupply: [3, 3],
   Antenna: [0, 0], Magnet: [2, 1],
+  Coil: [2, 1], Cell: [2, 1], Speaker: [1, 1], Mic: [1, 1],
 };
 
 export const cellKey = (i, j) => `${i},${j}`;

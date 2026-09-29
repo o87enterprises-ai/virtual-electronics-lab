@@ -233,8 +233,10 @@ function PartDrawing({ comp, stepNo }) {
       style={{ paintOrder: 'stroke', stroke: '#101010', strokeWidth: 3 }}>{text}</text>
   );
   // Blue badge with the build step that places this part.
-  const badgeAt = comp.type === 'PowerSupply'
-    ? [px(Math.round(comp.position[0] / PITCH)), pz(Math.round(comp.position[2] / PITCH)) - 10]
+  const ci0 = Math.round(comp.position[0] / PITCH);
+  const cj0 = Math.round(comp.position[2] / PITCH);
+  const badgeAt = comp.type === 'PowerSupply' || cells.length === 0
+    ? [px(ci0), pz(cj0) - 10]
     : [(px(cells[0][0]) + px(cells[cells.length - 1][0])) / 2, (pz(cells[0][1]) + pz(cells[cells.length - 1][1])) / 2 - 11];
   const badge = stepNo != null && (
     <g>
@@ -256,6 +258,31 @@ function PartDrawing({ comp, stepNo }) {
         {label(px(cells[0][0]), pz(cells[0][1]) - 8, '+')}
         {label(px(cells[1][0]), pz(cells[1][1]) - 8, '−')}
         {label(px(ci), pz(cj - 3) + 6, ref)}
+        {badge}
+      </g>
+    );
+  }
+  if (comp.type === 'Magnet') {
+    // no legs: it acts on coils nearby
+    return (
+      <g>
+        <rect x={px(ci0) - 12} y={pz(cj0) - 5} width={12} height={10} fill="#dd3333" />
+        <rect x={px(ci0)} y={pz(cj0) - 5} width={12} height={10} fill="#3355dd" />
+        <text x={px(ci0) - 6} y={pz(cj0) + 3} fill="white" fontSize="7" textAnchor="middle">N</text>
+        <text x={px(ci0) + 6} y={pz(cj0) + 3} fill="white" fontSize="7" textAnchor="middle">S</text>
+        {label(px(ci0), pz(cj0) + 16, ref)}
+        {badge}
+      </g>
+    );
+  }
+  if (comp.type === 'Antenna') {
+    const [c] = cells;
+    return (
+      <g>
+        <line x1={px(c[0])} y1={pz(c[1])} x2={px(c[0])} y2={pz(c[1]) - 14} stroke="#aaa" strokeWidth={1.6} />
+        <path d={`M ${px(c[0]) - 7} ${pz(c[1]) - 20} L ${px(c[0])} ${pz(c[1]) - 12} L ${px(c[0]) + 7} ${pz(c[1]) - 20}`} stroke="#aaa" strokeWidth={1.6} fill="none" />
+        <circle cx={px(c[0])} cy={pz(c[1])} r={2.4} fill="#888" />
+        {label(px(c[0]) + 10, pz(c[1]) + 3, ref, 'start')}
         {badge}
       </g>
     );
@@ -298,6 +325,30 @@ function PartDrawing({ comp, stepNo }) {
       <g>
         <rect x={mid[0] - 7} y={mid[1] - 7} width={14} height={14} rx={2} fill="#555" stroke="#888" />
         <circle cx={mid[0]} cy={mid[1]} r={4} fill="#cc3333" />
+      </g>
+    );
+  } else if (comp.type === 'Coil') {
+    body = (
+      <Along a={a} b={b}>
+        {[-3, -1, 1, 3].map((k) => (
+          <ellipse key={k} cx={(k * len) / 12} cy={0} rx={len / 14} ry={5.5} fill="none" stroke="#c8743a" strokeWidth={1.6} />
+        ))}
+      </Along>
+    );
+  } else if (comp.type === 'Cell') {
+    body = (
+      <g>
+        <ellipse cx={mid[0]} cy={mid[1]} rx={len * 0.32} ry={7} fill={comp.metal === 'zn-c' ? '#222' : comp.metal === 'al-cu' ? '#6fb7ff' : '#f5d928'} stroke="#8a7a20" strokeWidth={0.8} />
+        <circle cx={px(a[0])} cy={pz(a[1])} r={2.2} fill="#ff5555" />
+        <circle cx={px(b[0])} cy={pz(b[1])} r={2.2} fill="#5599ff" />
+      </g>
+    );
+  } else if (comp.type === 'Speaker' || comp.type === 'Mic') {
+    body = (
+      <g>
+        <circle cx={mid[0]} cy={mid[1]} r={6} fill="#1a1a1a" stroke="#888" strokeWidth={0.8} />
+        <circle cx={mid[0]} cy={mid[1]} r={3} fill="#444" />
+        {comp.type === 'Mic' && <circle cx={px(a[0])} cy={pz(a[1])} r={2.2} fill="#ff5555" />}
       </g>
     );
   } else if (comp.type === 'Transistor') {

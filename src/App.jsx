@@ -23,10 +23,13 @@ import Textbook from './components/Textbook';
 import FaultEffects from './components/FaultEffects';
 import HelpModal from './components/HelpModal';
 import ProjectsModal from './components/ProjectsModal';
+import RadioPanel from './components/RadioPanel';
+import WalkiePanel from './components/WalkiePanel';
 import { PITCH } from './lib/constants';
 import {
   Resistor, LED, Capacitor, Diode, Transistor,
   IntegratedCircuit, Switch, PowerSupply, Antenna, Magnet, Wire,
+  Coil, Cell, Speaker, Mic,
 } from './components/InteractiveComponents';
 
 // Height of each component's origin above the board so it sits on the surface
@@ -34,6 +37,7 @@ import {
 const Y_OFFSET = {
   Resistor: 0.02, LED: 0.025, Capacitor: 0.04, Diode: 0.02, Transistor: 0.05,
   IC: 0.025, Switch: 0.02, PowerSupply: 0.055, Antenna: 0.2, Magnet: 0.025, Wire: 0.005,
+  Coil: 0.02, Cell: 0.02, Speaker: 0.02, Mic: 0.02,
 };
 
 const restY = (type) => BOARD_TOP_Y + (Y_OFFSET[type] ?? 0.03);
@@ -41,6 +45,7 @@ const restY = (type) => BOARD_TOP_Y + (Y_OFFSET[type] ?? 0.03);
 const COMPONENT_VISUALS = {
   Resistor, LED, Capacitor, Diode, Transistor,
   IC: IntegratedCircuit, Switch, PowerSupply, Antenna, Magnet, Wire,
+  Coil, Cell, Speaker, Mic,
 };
 
 function useIsMobile() {
@@ -215,6 +220,9 @@ export default function App() {
   }, []);
   // Guided project the coach is following (null = free build).
   const [activeProject, setActiveProject] = useState(null);
+  // The live radio / walkie-talkie panel opens once the build is wired; this
+  // remembers that it was closed, until another project is loaded.
+  const [payoffDismissed, setPayoffDismissed] = useState(false);
   const [showGhost, setShowGhost] = useState(true);
   // Holes / parts the coach is pointing at after "Show me".
   const [highlight, setHighlight] = useState(null);
@@ -330,6 +338,8 @@ export default function App() {
         ...(DEFAULT_VALUES[type] !== undefined ? { value: DEFAULT_VALUES[type] } : {}),
         ...(type === 'Switch' ? { pressed: false } : {}),
         ...(type === 'PowerSupply' ? { on: true } : {}),
+        ...(type === 'Cell' ? { metal: 'zn-cu' } : {}),
+        ...(type === 'Magnet' ? { spinning: false, speed: 2 } : {}),
       }]);
       // the picked type stays active so several parts can be placed in a row
     } else {
@@ -484,6 +494,7 @@ export default function App() {
   const loadProject = useCallback((project, mode = 'guided') => {
     setPlacedComponents(mode === 'auto' ? projectComponents(project, restY, `p${Date.now()}`) : []);
     setActiveProject(project);
+    setPayoffDismissed(false);
     setBoardType('HALF');
     selectType(null);
     selectPart(null);
@@ -509,6 +520,18 @@ export default function App() {
   const coachIssues = coach ? coach.issues.filter((i) => i.severity !== 'todo') : freeIssues;
   const problemCount = coachIssues.filter((i) => i.severity === 'error').length;
   const hintFor = (id) => coachIssues.find((i) => i.partIds?.includes(id)) || null;
+
+  // Wired correctly: every build step done, apart from "operate it" steps
+  // (the walkie-talkie's push-to-talk is held from its panel).
+  const payoffReady = !!(activeProject?.payoff && coach
+    && activeProject.steps.every((st, k) => st.expect || coach.steps[k].status === 'done')
+    && !coach.issues.some((i) => i.severity === 'error'));
+  const showPayoff = payoffReady && !payoffDismissed;
+  const coilTurns = placedComponents.find((c) => c.type === 'Coil')?.value ?? 5;
+  const setPtt = useCallback((pressed) => {
+    const s1 = placedComponents.find((c) => c.type === 'Switch');
+    if (s1) updateComponent(s1.id, { pressed });
+  }, [placedComponents, updateComponent]);
 
   // "Show me": select the part involved and pulse the holes for a while.
   const showIssue = useCallback((issue) => {
@@ -606,6 +629,9 @@ export default function App() {
           } : {})}
           {...(comp.type === 'Switch' ? { pressed: !!comp.pressed } : {})}
           {...(comp.type === 'PowerSupply' ? { on: comp.on !== false } : {})}
+          {...(comp.type === 'Magnet' ? { spinning: !!comp.spinning, speed: comp.speed ?? 2 } : {})}
+          {...(comp.type === 'Coil' ? { turns: comp.value ?? 100, field: sim.readings[comp.id]?.field ?? 0 } : {})}
+          {...(comp.type === 'Cell' ? { metal: comp.metal || 'zn-cu' } : {})}
           {...(comp.type === 'Wire' ? { path: wireRenderPath(comp, placedComponents) } : {})}
         />
       </group>
@@ -1006,6 +1032,15 @@ export default function App() {
                     ? `${activeProject.name} complete!`
                     : `Step ${coach.current + 1}/${activeProject.steps.length}: ${currentStep?.text ?? ''}`}
                 </span>
+                {payoffReady && payoffDismissed && (
+                  <span
+                    role="button"
+                    onClick={(e) => { e.stopPropagation(); setPayoffDismissed(false); }}
+                    style={{ flexShrink: 0, fontSize: '0.7rem', background: '#1d4ed8', color: 'white', borderRadius: 8, padding: '2px 8px' }}
+                  >
+                    {activeProject.payoff === 'radio' ? 'Open radio' : 'Open walkie-talkie'}
+                  </span>
+                )}
                 {problemCount > 0 && !coach.done && (
                   <span style={{ flexShrink: 0, fontSize: '0.65rem', background: '#ef4444', color: 'white', borderRadius: 8, padding: '1px 6px' }}>
                     {problemCount} problem{problemCount > 1 ? 's' : ''}
@@ -1112,6 +1147,12 @@ export default function App() {
       )}
       {showProjects && (
         <ProjectsModal onClose={() => setShowProjects(false)} onLoad={loadProject} />
+      )}
+      {showPayoff && activeProject.payoff === 'radio' && (
+        <RadioPanel coilTurns={coilTurns} onClose={() => setPayoffDismissed(true)} />
+      )}
+      {showPayoff && activeProject.payoff === 'walkie' && (
+        <WalkiePanel coilTurns={coilTurns} onPtt={setPtt} onClose={() => setPayoffDismissed(true)} />
       )}
     </div>
   );
